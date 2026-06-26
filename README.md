@@ -36,6 +36,12 @@ Show indexed repos:
 repo-index status
 ```
 
+Run the Phase 0 eval set:
+
+```bash
+repo-index eval evals/golden.repo-index-mcp.jsonl . -k 10
+```
+
 Run the MCP server over stdio:
 
 ```bash
@@ -54,6 +60,10 @@ Agent config example:
   }
 }
 ```
+
+## Evals
+
+Phase 0 eval docs live in `docs/phase-0-baseline.md`. The seed golden set lives in `evals/golden.repo-index-mcp.jsonl`.
 
 ## Phase 1 limits
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from repo_index_mcp.engine import DEFAULT_DB_PATH, RepoIndex
+from repo_index_mcp.eval import format_report, load_golden_cases, run_recall_eval
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,6 +39,15 @@ def main(argv: list[str] | None = None) -> int:
         result = engine.reindex(args.repo_path)
         print(json.dumps(asdict(result), indent=2))
         return 0
+
+    if args.command == "eval":
+        engine.index_repo(args.repo_path)
+        report = run_recall_eval(engine, load_golden_cases(args.golden_file), k=args.k)
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            print(format_report(report))
+        return 1 if args.fail_under is not None and report.recall_at_k < args.fail_under else 0
 
     if args.command == "serve":
         from repo_index_mcp.mcp_server import run_server
@@ -71,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     reindex = subparsers.add_parser("reindex", help="reindex repo")
     reindex.add_argument("repo_path", nargs="?", type=Path)
+
+    eval_parser = subparsers.add_parser("eval", help="run Recall@K over a golden JSONL set")
+    eval_parser.add_argument("golden_file", type=Path)
+    eval_parser.add_argument("repo_path", type=Path)
+    eval_parser.add_argument("-k", type=positive_int, default=10)
+    eval_parser.add_argument("--fail-under", type=float)
+    eval_parser.add_argument("--json", action="store_true")
 
     serve = subparsers.add_parser("serve", help="run MCP server over stdio")
     serve.set_defaults(_serve=True)

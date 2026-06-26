@@ -1,0 +1,32 @@
+{"id":"rim-001","query":"SQLiteStorage replace chunks embedding model","expected_path":"src/repo_index_mcp/storage.py","expected_text":"def replace_chunks"}
+{"id":"rim-002","query":"cosine similarity implementation for vectors","expected_path":"src/repo_index_mcp/embeddings.py","expected_text":"def cosine_similarity"}
+{"id":"rim-003","query":"tokenize code splits snake case camel case identifiers","expected_path":"src/repo_index_mcp/embeddings.py","expected_text":"def tokenize_code"}
+{"id":"rim-004","query":"deterministic local hash embeddings provider dimensions","expected_path":"src/repo_index_mcp/embeddings.py","expected_text":"class HashEmbeddingProvider"}
+{"id":"rim-005","query":"LineChunker max_lines overlap_lines chunks","expected_path":"src/repo_index_mcp/chunking.py","expected_text":"class LineChunker"}
+{"id":"rim-006","query":"detect language from file suffix extension","expected_path":"src/repo_index_mcp/chunking.py","expected_text":"def detect_language"}
+{"id":"rim-007","query":"git ls-files tracked files","expected_path":"src/repo_index_mcp/repo.py","expected_text":"def tracked_files"}
+{"id":"rim-008","query":"skip secrets env pem keys node_modules lockfiles","expected_path":"src/repo_index_mcp/repo.py","expected_text":"DEFAULT_EXCLUDES"}
+{"id":"rim-009","query":"resolve repo root using git rev-parse show-toplevel","expected_path":"src/repo_index_mcp/repo.py","expected_text":"def resolve_repo_root"}
+{"id":"rim-010","query":"list repos chunk count indexed_at stale status sqlite","expected_path":"src/repo_index_mcp/storage.py","expected_text":"def list_repos"}
+{"id":"rim-011","query":"CLI serve command runs MCP server over stdio","expected_path":"src/repo_index_mcp/cli.py","expected_text":"if args.command == \"serve\""}
+{"id":"rim-012","query":"MCP search_code tool returns ranked snippets locations","expected_path":"src/repo_index_mcp/mcp_server.py","expected_text":"def search_code"}
+{"id":"rim-013","query":"MCP get_symbol best effort symbol lookup","expected_path":"src/repo_index_mcp/mcp_server.py","expected_text":"def get_symbol"}
+{"id":"rim-014","query":"RepoIndex query embeds query and searches storage","expected_path":"src/repo_index_mcp/engine.py","expected_text":"def query"}
+{"id":"rim-015","query":"RepoIndex reindex repo_path required unless exactly one repo indexed","expected_path":"src/repo_index_mcp/engine.py","expected_text":"def reindex"}
+{"id":"rim-016","query":"IndexResult dataclass files_indexed chunks_indexed duration_ms","expected_path":"src/repo_index_mcp/models.py","expected_text":"class IndexResult"}
+{"id":"rim-017","query":"SearchResult dataclass snippet score language symbol_name","expected_path":"src/repo_index_mcp/models.py","expected_text":"class SearchResult"}
+{"id":"rim-018","query":"pytest engine indexes repo and query returns retry code","expected_path":"tests/test_engine.py","expected_text":"test_index_repo_and_query_returns_code"}
+{"id":"rim-019","query":"test status marks repo stale after new commit","expected_path":"tests/test_engine.py","expected_text":"test_status_marks_repo_stale"}
+{"id":"rim-020","query":"README pipx install agent config mcpServers repo-index","expected_path":"README.md","expected_text":"pipx install"}
+{"id":"rim-021","query":"PRD local first offline capable hard constraint no network query path","expected_path":"docs/PRD-codebase-index-mcp.md","expected_text":"Local-first / offline-capable"}
+{"id":"rim-022","query":"PRD success metrics Recall@10 golden query expected file symbol","expected_path":"docs/PRD-codebase-index-mcp.md","expected_text":"Recall@10"}
+{"id":"rim-023","query":"SEDD vector store decision SQLite pgvector dedicated vector DB","expected_path":"docs/SEDD-20260626-repo-index-mcp.md","expected_text":"Decision 2"}
+{"id":"rim-024","query":"SEDD MCP tools search_code get_symbol list_repos reindex contract","expected_path":"docs/SEDD-20260626-repo-index-mcp.md","expected_text":"MCP tools"}
+{"id":"rim-025","query":"SEDD phase 2 fresh multi repo freshness target cold index throughput","expected_path":"docs/SEDD-20260626-repo-index-mcp.md","expected_text":"Phase 2"}
+{"id":"rim-026","query":"SEDD embedding provider local hosted hard constraint C2 source code","expected_path":"docs/SEDD-20260626-repo-index-mcp.md","expected_text":"Decision 1"}
+{"id":"rim-027","query":"pyproject console scripts repo-index repo-index-mcp","expected_path":"pyproject.toml","expected_text":"repo-index"}
+{"id":"rim-028","query":"gitignore pytest cache ruff cache repo index sqlite","expected_path":".gitignore","expected_text":".pytest_cache"}
+{"id":"rim-029","query":"chunk id hash repo path start line content","expected_path":"src/repo_index_mcp/storage.py","expected_text":"def chunk_id_for"}
+{"id":"rim-030","query":"repo_id from git remote origin fallback absolute path","expected_path":"src/repo_index_mcp/repo.py","expected_text":"def repo_id_for"}
+{"id":"rim-031","query":"FastMCP dependency import mcp server","expected_path":"src/repo_index_mcp/mcp_server.py","expected_text":"FastMCP"}
+{"id":"rim-032","query":"CLI positive_int parser rejects non positive k","expected_path":"src/repo_index_mcp/cli.py","expected_text":"def positive_int"}
