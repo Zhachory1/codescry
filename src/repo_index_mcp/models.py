@@ -25,6 +25,8 @@ class SearchResult:
     score: float
     language: str
     symbol_name: str | None = None
+    is_stale: bool = False
+    has_dirty_tracked_files: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,3 +40,5 @@ class IndexResult:
     files_changed: int = 0
     files_removed: int = 0
     chunks_total: int = 0
+    error_count: int = 0
+    last_error: str | None = None

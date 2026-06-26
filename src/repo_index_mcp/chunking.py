@@ -53,6 +53,10 @@ class LineChunker:
         self.max_lines = max_lines
         self.overlap_lines = overlap_lines
 
+    @property
+    def version(self) -> str:
+        return f"line-v1:max={self.max_lines}:overlap={self.overlap_lines}"
+
     def chunk_file(
         self,
         *,

@@ -48,6 +48,8 @@ def run_server(*, db_path: str | Path = DEFAULT_DB_PATH) -> None:
             "end_line": result.end_line,
             "definition": result.snippet,
             "score": result.score,
+            "is_stale": result.is_stale,
+            "has_dirty_tracked_files": result.has_dirty_tracked_files,
         }
 
     @mcp.tool()

@@ -27,6 +27,6 @@
 {"id":"rim-027","query":"pyproject console scripts repo-index repo-index-mcp","expected_path":"pyproject.toml","expected_text":"repo-index"}
 {"id":"rim-028","query":"gitignore pytest cache ruff cache repo index sqlite","expected_path":".gitignore","expected_text":".pytest_cache"}
 {"id":"rim-029","query":"chunk id hash repo path start line content","expected_path":"src/repo_index_mcp/storage.py","expected_text":"def chunk_id_for"}
-{"id":"rim-030","query":"repo_id from git remote origin fallback absolute path","expected_path":"src/repo_index_mcp/repo.py","expected_text":"def repo_id_for"}
+{"id":"rim-030","query":"repo_id uses resolved local repo path and remote_url is separate sanitized metadata","expected_path":"src/repo_index_mcp/repo.py","expected_text":"def repo_id_for"}
 {"id":"rim-031","query":"FastMCP dependency import mcp server","expected_path":"src/repo_index_mcp/mcp_server.py","expected_text":"FastMCP"}
 {"id":"rim-032","query":"CLI positive_int parser rejects non positive k","expected_path":"src/repo_index_mcp/cli.py","expected_text":"def positive_int"}

@@ -140,7 +140,7 @@ A single logical record per chunk. (Concrete columns/types live in the storage i
 | Field | Type | Notes |
 | :--- | :--- | :--- |
 | `chunk_id` | string (content-addressed) | Hash of `repo_id + path + chunk_content`. Enables incremental re-embed: unchanged content → unchanged id → skip. |
-| `repo_id` | string | Namespacing key — stable per repo (see Decision 7). |
+| `repo_id` | string | Local checkout namespace key for the laptop index — canonical resolved repo root path in v1 (see Decision 7). |
 | `path` | string | Repo-relative file path. |
 | `language` | string | Detected from extension; drives the tree-sitter grammar. |
 | `symbol_name` | string \| null | Enclosing function/class/endpoint, when the AST yields one. |
@@ -213,7 +213,7 @@ No new business object is created and no interpretation logic is owned — deriv
 
 ### Decision 7 — Multi-repo identity
 
-**Decision: namespace by a stable `repo_id`** derived from the git remote origin URL (falling back to the absolute path when there's no remote), plus the indexed `commit_sha` on every chunk. This keeps cross-repo results attributable (U1/U3) and lets `list_repos()` report per-repo freshness. Multi-branch indexing is **deferred to P2** (single-branch in v1 — tracked debt, §7).
+**Decision: namespace v1 by local checkout path.** For the local SQLite index, `repo_id` is the canonical resolved repo root path. Store sanitized `remote_url` as display/debug metadata, not as the primary key. This avoids collisions between multiple local checkouts or worktrees of the same remote while keeping cross-repo results attributable (U1/U3). If this graduates to a shared service, repo identity needs a separate design using normalized remote URL plus clone/worktree identity. Multi-branch indexing is **deferred to P2** (single-branch in v1 — tracked debt, §7).
 
 ## 4.3 API / Interface Contract
 

@@ -1,7 +1,13 @@
 import subprocess
 from pathlib import Path
 
-from repo_index_mcp.repo import content_hash, discover_repos, should_prune_dir, should_skip
+from repo_index_mcp.repo import (
+    content_hash,
+    discover_repos,
+    sanitize_remote_url,
+    should_prune_dir,
+    should_skip,
+)
 
 
 def test_discover_repos_skips_generated_dirs(tmp_path: Path) -> None:
@@ -34,6 +40,15 @@ def test_skip_rules() -> None:
     assert should_prune_dir("node_modules") is True
 
 
+def test_sanitize_remote_url_removes_userinfo() -> None:
+    assert (
+        sanitize_remote_url("https://ghp_secret@github.com/acme/repo.git?token=secret#frag")
+        == "https://github.com/acme/repo.git"
+    )
+    assert sanitize_remote_url("git@github.com:acme/repo.git") == "git@github.com:acme/repo.git"
+    assert sanitize_remote_url("TOKEN@gitlab.com:acme/repo.git") == "gitlab.com:acme/repo.git"
+
+
 def test_content_hash_changes_with_content() -> None:
     assert content_hash("one") == content_hash("one")
     assert content_hash("one") != content_hash("two")
@@ -52,6 +67,8 @@ def commit_all(repo: Path, message: str) -> None:
             "user.email=test@example.com",
             "-c",
             "user.name=Test",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-m",
             message,

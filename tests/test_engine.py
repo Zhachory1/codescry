@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -70,6 +71,22 @@ def test_index_repo_reembeds_when_model_changes(tmp_path: Path) -> None:
     assert result.chunks_indexed == 1
 
 
+def test_index_repo_reembeds_when_chunker_version_changes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    first = RepoIndex(db_path=tmp_path / "index.sqlite")
+    first.index_repo(repo)
+    second = RepoIndex(db_path=tmp_path / "index.sqlite", chunker=VersionedChunker("custom-v2"))
+    result = second.index_repo(repo)
+
+    assert result.files_changed == 1
+    assert result.chunks_indexed == 1
+
+
 def test_index_repo_removes_deleted_file_chunks(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -90,6 +107,101 @@ def test_index_repo_removes_deleted_file_chunks(tmp_path: Path) -> None:
     assert result.files_removed == 1
     assert result.chunks_total == 1
     assert all(search_result.path != "old.py" for search_result in results)
+
+
+def test_index_repo_skips_gitlinks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    subprocess.run(
+        [
+            "git",
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,e69de29bb2d1d6434b8b29ae775ad8c2e48c5391,submodule",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    git_commit(repo, "add gitlink")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    result = engine.index_repo(repo)
+
+    assert result.error_count == 0
+    assert result.files_indexed == 0
+
+
+def test_incremental_reindex_removes_file_that_becomes_large(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('small')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+    (repo / "app.py").write_text("x" * 1_000_001, encoding="utf-8")
+    commit_all(repo, "large")
+    result = engine.index_repo(repo)
+    results = engine.query("small", k=5)
+
+    assert result.files_removed == 1
+    assert result.chunks_total == 0
+    assert results == []
+
+
+def test_incremental_reindex_removes_file_that_becomes_binary(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('small')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+    (repo / "app.py").write_bytes(b"\0binary")
+    commit_all(repo, "binary")
+    result = engine.index_repo(repo)
+    results = engine.query("small", k=5)
+
+    assert result.files_removed == 1
+    assert result.chunks_total == 0
+    assert results == []
+
+
+def test_index_repo_skips_large_committed_blobs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "large.py").write_text("x" * 1_000_001, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    result = engine.index_repo(repo)
+
+    assert result.error_count == 0
+    assert result.files_indexed == 0
+    assert result.chunks_total == 0
+
+
+def test_index_root_continues_past_unborn_repo(tmp_path: Path) -> None:
+    good = tmp_path / "good"
+    unborn = tmp_path / "unborn"
+    good.mkdir()
+    unborn.mkdir()
+    (good / "app.py").write_text("def good_service(): pass\n", encoding="utf-8")
+    init_repo(good)
+    init_repo(unborn)
+    commit_all(good, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    results = engine.index_root(tmp_path)
+
+    assert len(results) == 2
+    assert sorted(result.error_count for result in results) == [0, 1]
+    assert any(result.files_indexed == 1 for result in results)
 
 
 def test_index_root_discovers_multiple_repos(tmp_path: Path) -> None:
@@ -113,6 +225,167 @@ def test_index_root_discovers_multiple_repos(tmp_path: Path) -> None:
     assert {Path(str(repo["repo_path"])).name for repo in repos} == {"first", "second"}
 
 
+def test_index_repo_cleans_legacy_repo_id_rows_for_same_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    legacy_id = "https://github.com/example/repo.git"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE repos (
+                repo_id TEXT PRIMARY KEY,
+                repo_path TEXT NOT NULL,
+                last_commit_sha TEXT NOT NULL,
+                indexed_at TEXT NOT NULL
+            );
+            CREATE TABLE chunks (
+                chunk_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                repo_path TEXT NOT NULL,
+                path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                symbol_name TEXT,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                commit_sha TEXT NOT NULL,
+                content TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                embedding_model TEXT NOT NULL,
+                indexed_at TEXT NOT NULL
+            );
+            CREATE TABLE indexed_files (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                indexed_at TEXT NOT NULL,
+                chunk_count INTEGER NOT NULL,
+                embedding_model TEXT NOT NULL,
+                PRIMARY KEY(repo_id, path)
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO repos(repo_id, repo_path, last_commit_sha, indexed_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (legacy_id, str(repo), "old", "now"),
+        )
+        conn.execute(
+            """
+            INSERT INTO chunks(
+                chunk_id, repo_id, repo_path, path, language, symbol_name, start_line, end_line,
+                commit_sha, content, embedding, embedding_model, indexed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old-chunk",
+                legacy_id,
+                str(repo),
+                "old.py",
+                "python",
+                None,
+                1,
+                1,
+                "old",
+                "print('old')",
+                "[]",
+                "hash-v1:dims=256",
+                "now",
+            ),
+        )
+
+    engine = RepoIndex(db_path=db_path)
+    result = engine.index_repo(repo)
+    repos = engine.list_repos()
+    old_results = engine.query("old", k=5)
+    current_results = engine.query("one", k=1)
+
+    assert result.error_count == 0
+    assert result.chunks_indexed == 1
+    assert [item["repo_id"] for item in repos] == [str(repo)]
+    assert all(search_result.path != "old.py" for search_result in old_results)
+    assert current_results[0].path == "app.py"
+
+
+def test_remote_url_in_status_strips_credentials(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://ghp_secret@github.com/acme/repo.git"],
+        cwd=repo,
+        check=True,
+    )
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+
+    assert engine.list_repos()[0]["remote_url"] == "https://github.com/acme/repo.git"
+
+
+def test_scp_like_remote_url_in_status_strips_non_git_user(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "TOKEN@gitlab.com:group/repo.git"],
+        cwd=repo,
+        check=True,
+    )
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+
+    assert engine.list_repos()[0]["remote_url"] == "gitlab.com:group/repo.git"
+
+
+def test_status_marks_dirty_tracked_files(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+    (repo / "app.py").write_text("print('dirty')\n", encoding="utf-8")
+
+    repos = engine.list_repos()
+    results = engine.query("one", k=1)
+
+    assert repos[0]["is_stale"] is False
+    assert repos[0]["has_dirty_tracked_files"] is True
+    assert results[0].has_dirty_tracked_files is True
+    assert "dirty" not in results[0].snippet
+
+
+def test_index_repo_failure_keeps_repo_stale(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite", chunker=FailingChunker())
+    result = engine.index_repo(repo)
+    repos = engine.list_repos()
+
+    assert result.error_count == 1
+    assert result.last_error is not None
+    assert repos[0]["is_stale"] is True
+    assert repos[0]["error_count"] == 1
+
+
 def test_status_marks_repo_stale(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -128,6 +401,23 @@ def test_status_marks_repo_stale(tmp_path: Path) -> None:
     repos = engine.list_repos()
 
     assert repos[0]["is_stale"] is True
+
+
+class VersionedChunker:
+    def __init__(self, version: str) -> None:
+        self.version = version
+
+    def chunk_file(self, **kwargs):  # type: ignore[no-untyped-def]
+        from repo_index_mcp.chunking import LineChunker
+
+        return LineChunker().chunk_file(**kwargs)
+
+
+class FailingChunker:
+    version = "failing-v1"
+
+    def chunk_file(self, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("chunk failed")
 
 
 def init_repo(repo: Path) -> None:
@@ -147,6 +437,8 @@ def git_commit(repo: Path, message: str) -> None:
             "user.email=test@example.com",
             "-c",
             "user.name=Test",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-m",
             message,

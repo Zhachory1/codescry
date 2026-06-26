@@ -21,6 +21,18 @@ def test_install_hooks_writes_executable_git_hooks(tmp_path: Path) -> None:
         assert os.access(path, os.X_OK)
 
 
+def test_install_hooks_preserves_custom_db_path(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "custom index.sqlite"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+
+    installed = install_hooks(repo, command="repo-index-test", db_path=db_path)
+
+    script = installed[0].read_text(encoding="utf-8")
+    assert f"--db '{db_path.resolve()}' reindex" in script
+
+
 def test_install_hooks_rejects_shell_metacharacters(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

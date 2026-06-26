@@ -20,13 +20,13 @@ def main(argv: list[str] | None = None) -> int:
         engine = RepoIndex(db_path=args.db)
         result = engine.index_repo(args.repo_path)
         print(json.dumps(asdict(result), indent=2))
-        return 0
+        return 1 if result.error_count else 0
 
     if args.command == "index-root":
         engine = RepoIndex(db_path=args.db)
         results = engine.index_root(args.root_path)
         print(json.dumps([asdict(result) for result in results], indent=2))
-        return 0
+        return 1 if any(result.error_count for result in results) else 0
 
     if args.command == "query":
         engine = RepoIndex(db_path=args.db)
@@ -49,19 +49,29 @@ def main(argv: list[str] | None = None) -> int:
         engine = RepoIndex(db_path=args.db)
         result = engine.reindex(args.repo_path)
         print(json.dumps(asdict(result), indent=2))
-        return 0
+        return 1 if result.error_count else 0
 
     if args.command == "install-hooks":
         repo_paths = discover_repos(args.path) if args.recursive else [args.path]
         installed = []
         for repo_path in repo_paths:
-            installed.extend(install_hooks(repo_path, command=args.command_name, force=args.force))
+            installed.extend(
+                install_hooks(
+                    repo_path,
+                    command=args.command_name,
+                    db_path=args.db,
+                    force=args.force,
+                )
+            )
         print(json.dumps([str(path) for path in installed], indent=2))
         return 0
 
     if args.command == "eval":
         engine = RepoIndex(db_path=args.db)
-        engine.index_repo(args.repo_path)
+        index_result = engine.index_repo(args.repo_path)
+        if index_result.error_count:
+            print(json.dumps(asdict(index_result), indent=2))
+            return 1
         report = run_recall_eval(engine, load_golden_cases(args.golden_file), k=args.k)
         if args.json:
             print(json.dumps(report.to_dict(), indent=2))
