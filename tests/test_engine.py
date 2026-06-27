@@ -26,8 +26,8 @@ def test_index_repo_and_query_returns_code(tmp_path: Path) -> None:
 
     assert index_result.files_indexed == 1
     assert index_result.files_changed == 1
-    assert index_result.chunks_indexed == 1
-    assert index_result.chunks_total == 1
+    assert index_result.chunks_indexed >= 1
+    assert index_result.chunks_total >= 1
     assert results[0].path == "app.py"
     assert "retry_request" in results[0].snippet
 

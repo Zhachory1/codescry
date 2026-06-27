@@ -208,6 +208,7 @@ class RepoIndex:
             query_embedding=query_embedding,
             embedding_model=self.embedding_provider.model_id,
             k=k,
+            query_text=query,
             repo=repo,
             path_prefix=path_prefix,
             language=language,
@@ -224,6 +225,26 @@ class RepoIndex:
             )
             for result in results
         ]
+
+    def get_symbol(self, name: str, *, repo: str | None = None) -> SearchResult | None:
+        result = self.storage.find_symbol(
+            name=name,
+            embedding_model=self.embedding_provider.model_id,
+            repo=repo,
+        )
+        if result is None:
+            results = self.query(name, repo=repo, k=1)
+            return results[0] if results else None
+        repo_state = {
+            str(item["repo_id"]): item for item in self._repo_status({result.repo})
+        }
+        return replace(
+            result,
+            is_stale=bool(repo_state.get(result.repo, {}).get("is_stale", True)),
+            has_dirty_tracked_files=bool(
+                repo_state.get(result.repo, {}).get("has_dirty_tracked_files", False)
+            ),
+        )
 
     def list_repos(self) -> list[dict[str, object]]:
         return self._repo_status(None)

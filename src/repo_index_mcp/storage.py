@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from repo_index_mcp.embeddings import cosine_similarity
+from repo_index_mcp.embeddings import cosine_similarity, tokenize_code
 from repo_index_mcp.models import Chunk, SearchResult
 
 BUSY_TIMEOUT_MS = 5000
@@ -225,6 +225,7 @@ class SQLiteStorage:
         query_embedding: list[float],
         embedding_model: str,
         k: int,
+        query_text: str,
         repo: str | None = None,
         path_prefix: str | None = None,
         language: str | None = None,
@@ -242,7 +243,18 @@ class SQLiteStorage:
             params.append(language)
 
         sql = f"""
-            SELECT repo_id, path, start_line, end_line, content, embedding, language, symbol_name
+            SELECT
+                repo_id,
+                path,
+                start_line,
+                end_line,
+                content,
+                embedding,
+                language,
+                symbol_name,
+                symbol_kind,
+                symbol_line,
+                symbol_confidence
             FROM chunks
             WHERE {' AND '.join(where)}
         """
@@ -250,7 +262,14 @@ class SQLiteStorage:
         with self._connect() as conn:
             for row in conn.execute(sql, params):
                 embedding = json.loads(row[5])
-                score = cosine_similarity(query_embedding, embedding)
+                vector_score = cosine_similarity(query_embedding, embedding)
+                score = hybrid_score(
+                    query_text=query_text,
+                    vector_score=vector_score,
+                    path=row[1],
+                    content=row[4],
+                    symbol_name=row[7],
+                )
                 results.append(
                     SearchResult(
                         repo=row[0],
@@ -261,11 +280,67 @@ class SQLiteStorage:
                         score=score,
                         language=row[6],
                         symbol_name=row[7],
+                        symbol_kind=row[8],
+                        symbol_line=row[9],
+                        symbol_confidence=row[10],
                     )
                 )
 
-        results.sort(key=lambda item: item.score, reverse=True)
+        results.sort(key=search_sort_key, reverse=True)
         return results[:k]
+
+    def find_symbol(
+        self,
+        *,
+        name: str,
+        embedding_model: str,
+        repo: str | None = None,
+    ) -> SearchResult | None:
+        where = ["embedding_model = ?", "symbol_name IS NOT NULL"]
+        params: list[str] = [embedding_model]
+        if repo:
+            where.append("(repo_id = ? OR repo_path = ?)")
+            params.extend([repo, repo])
+        rows = []
+        with self._connect() as conn:
+            for row in conn.execute(
+                f"""
+                SELECT
+                    repo_id,
+                    path,
+                    start_line,
+                    end_line,
+                    content,
+                    language,
+                    symbol_name,
+                    symbol_kind,
+                    symbol_line,
+                    symbol_confidence
+                FROM chunks
+                WHERE {' AND '.join(where)}
+                """,
+                params,
+            ):
+                rank = symbol_rank(name, row[6], row[9])
+                if rank is not None:
+                    rows.append((rank, row))
+        if not rows:
+            return None
+        rows.sort(key=lambda item: item[0])
+        row = rows[0][1]
+        return SearchResult(
+            repo=row[0],
+            path=row[1],
+            start_line=row[2],
+            end_line=row[3],
+            snippet=row[4],
+            score=1.0,
+            language=row[5],
+            symbol_name=row[6],
+            symbol_kind=row[7],
+            symbol_line=row[8],
+            symbol_confidence=row[9],
+        )
 
     def list_repos(self) -> list[dict[str, object]]:
         return self.repos_by_id(None)
@@ -361,6 +436,9 @@ class SQLiteStorage:
                     path TEXT NOT NULL,
                     language TEXT NOT NULL,
                     symbol_name TEXT,
+                    symbol_kind TEXT,
+                    symbol_line INTEGER,
+                    symbol_confidence TEXT,
                     start_line INTEGER NOT NULL,
                     end_line INTEGER NOT NULL,
                     commit_sha TEXT NOT NULL,
@@ -397,6 +475,24 @@ class SQLiteStorage:
                 table="repos",
                 column="error_count",
                 definition="INTEGER NOT NULL DEFAULT 0",
+            )
+            ensure_column(
+                conn,
+                table="chunks",
+                column="symbol_kind",
+                definition="TEXT",
+            )
+            ensure_column(
+                conn,
+                table="chunks",
+                column="symbol_line",
+                definition="INTEGER",
+            )
+            ensure_column(
+                conn,
+                table="chunks",
+                column="symbol_confidence",
+                definition="TEXT",
             )
             ensure_column(
                 conn,
@@ -474,6 +570,9 @@ def chunk_rows(
             chunk.path,
             chunk.language,
             chunk.symbol_name,
+            chunk.symbol_kind,
+            chunk.symbol_line,
+            chunk.symbol_confidence,
             chunk.start_line,
             chunk.end_line,
             commit_sha,
@@ -498,6 +597,9 @@ def insert_chunks(conn: sqlite3.Connection, rows: Sequence[tuple[object, ...]]) 
             path,
             language,
             symbol_name,
+            symbol_kind,
+            symbol_line,
+            symbol_confidence,
             start_line,
             end_line,
             commit_sha,
@@ -507,7 +609,7 @@ def insert_chunks(conn: sqlite3.Connection, rows: Sequence[tuple[object, ...]]) 
             embedding_model,
             chunker_version,
             indexed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -524,12 +626,75 @@ def chunk_id_for(chunk: Chunk) -> str:
     h.update(b"\0")
     h.update(str(chunk.end_line).encode("ascii"))
     h.update(b"\0")
+    h.update((chunk.symbol_name or "").encode("utf-8"))
+    h.update(b"\0")
+    h.update((chunk.symbol_confidence or "").encode("utf-8"))
+    h.update(b"\0")
     h.update(content_hash.encode("ascii"))
     return h.hexdigest()
 
 
 def content_hash_for(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def hybrid_score(
+    *,
+    query_text: str,
+    vector_score: float,
+    path: str,
+    content: str,
+    symbol_name: str | None,
+) -> float:
+    normalized_vector = max(0.0, min(1.0, (vector_score + 1.0) / 2.0))
+    lexical = token_overlap(query_text, content)
+    symbol = symbol_match_score(query_text, symbol_name)
+    path_score = token_overlap(query_text, path.replace("/", " ").replace(".", " "))
+    return (0.70 * normalized_vector) + (0.20 * lexical) + (0.07 * symbol) + (0.03 * path_score)
+
+
+def token_overlap(query_text: str, candidate_text: str) -> float:
+    query_tokens = set(tokenize_code(query_text))
+    if not query_tokens:
+        return 0.0
+    candidate_tokens = set(tokenize_code(candidate_text))
+    return len(query_tokens & candidate_tokens) / len(query_tokens)
+
+
+def symbol_match_score(query_text: str, symbol_name: str | None) -> float:
+    if not symbol_name:
+        return 0.0
+    query_tokens = set(tokenize_code(query_text))
+    symbol_tokens = set(tokenize_code(symbol_name))
+    if not query_tokens or not symbol_tokens:
+        return 0.0
+    if symbol_name.lower() in query_text.lower():
+        return 1.0
+    return len(query_tokens & symbol_tokens) / len(symbol_tokens)
+
+
+def search_sort_key(result: SearchResult) -> tuple[float, int, int, int]:
+    confidence = 1 if result.symbol_confidence == "parser" else 0
+    return (result.score, confidence, -len(result.path), -result.start_line)
+
+
+def symbol_rank(
+    name: str,
+    symbol_name: str | None,
+    confidence: str | None,
+) -> tuple[int, int, int] | None:
+    if not symbol_name:
+        return None
+    requested = name.lower()
+    candidate = symbol_name.lower()
+    if requested == candidate:
+        match_rank = 0
+    elif requested in candidate:
+        match_rank = 1
+    else:
+        return None
+    confidence_rank = 0 if confidence == "parser" else 1
+    return (match_rank, confidence_rank, len(symbol_name))
 
 
 def now_iso() -> str:

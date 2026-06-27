@@ -10,6 +10,9 @@ class Chunk:
     path: str
     language: str
     symbol_name: str | None
+    symbol_kind: str | None
+    symbol_line: int | None
+    symbol_confidence: str | None
     start_line: int
     end_line: int
     content: str
@@ -25,6 +28,9 @@ class SearchResult:
     score: float
     language: str
     symbol_name: str | None = None
+    symbol_kind: str | None = None
+    symbol_line: int | None = None
+    symbol_confidence: str | None = None
     is_stale: bool = False
     has_dirty_tracked_files: bool = False
 

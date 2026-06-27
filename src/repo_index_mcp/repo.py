@@ -36,6 +36,7 @@ DEFAULT_EXCLUDES = (
     "**/target/**",
     "__pycache__/**",
     "**/__pycache__/**",
+    "evals/results/**",
     "*.lock",
     "package-lock.json",
     "pnpm-lock.yaml",
