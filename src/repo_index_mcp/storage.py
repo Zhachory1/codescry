@@ -11,6 +11,26 @@ from repo_index_mcp.embeddings import cosine_similarity, tokenize_code
 from repo_index_mcp.models import Chunk, SearchResult
 
 BUSY_TIMEOUT_MS = 5000
+FTS_INDEX_VERSION = "fts-v1"
+FTS_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "where",
+    "what",
+    "how",
+    "does",
+    "this",
+    "that",
+    "from",
+    "into",
+    "code",
+    "find",
+    "show",
+    "implemented",
+    "implementation",
+}
 
 
 class SQLiteStorage:
@@ -27,6 +47,7 @@ class SQLiteStorage:
             ).fetchall()
             old_ids = [row[0] for row in rows]
             for old_id in old_ids:
+                delete_fts_for_repo(conn, old_id)
                 conn.execute("DELETE FROM chunks WHERE repo_id = ?", (old_id,))
                 conn.execute("DELETE FROM indexed_files WHERE repo_id = ?", (old_id,))
                 conn.execute("DELETE FROM repos WHERE repo_id = ?", (old_id,))
@@ -121,6 +142,7 @@ class SQLiteStorage:
     ) -> int:
         rows = chunk_rows(chunks, embeddings, commit_sha, embedding_model, chunker_version)
         with self._connect() as conn:
+            delete_fts_for_repo(conn, repo_id)
             conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
             conn.execute("DELETE FROM indexed_files WHERE repo_id = ?", (repo_id,))
             insert_chunks(conn, rows)
@@ -153,6 +175,7 @@ class SQLiteStorage:
         rows = chunk_rows(chunks, embeddings, commit_sha, embedding_model, chunker_version)
         indexed_at = now_iso()
         with self._connect() as conn:
+            delete_fts_for_path(conn, repo_id, path)
             conn.execute("DELETE FROM chunks WHERE repo_id = ? AND path = ?", (repo_id, path))
             insert_chunks(conn, rows)
             conn.execute(
@@ -191,6 +214,7 @@ class SQLiteStorage:
 
     def clear_repo(self, *, repo_id: str) -> None:
         with self._connect() as conn:
+            delete_fts_for_repo(conn, repo_id)
             conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
             conn.execute("DELETE FROM indexed_files WHERE repo_id = ?", (repo_id,))
 
@@ -200,6 +224,7 @@ class SQLiteStorage:
         with self._connect() as conn:
             deleted_chunks = 0
             for path in paths:
+                delete_fts_for_path(conn, repo_id, path)
                 cursor = conn.execute(
                     "DELETE FROM chunks WHERE repo_id = ? AND path = ?",
                     (repo_id, path),
@@ -268,6 +293,7 @@ class SQLiteStorage:
 
         sql = f"""
             SELECT
+                chunk_id,
                 repo_id,
                 path,
                 start_line,
@@ -284,28 +310,37 @@ class SQLiteStorage:
         """
         rows: list[dict[str, object]] = []
         with self._connect() as conn:
+            bm25_scores = fts_scores(
+                conn,
+                query_text=query_text,
+                embedding_model=embedding_model,
+                repo=repo,
+                path_prefix=path_prefix,
+                language=language,
+            )
             for row in conn.execute(sql, params):
-                embedding = json.loads(row[5])
+                embedding = json.loads(row[6])
                 vector_score = cosine_similarity(query_embedding, embedding)
                 parts = score_breakdown(
                     query_text=query_text,
                     vector_score=vector_score,
-                    path=row[1],
-                    content=row[4],
-                    symbol_name=row[7],
+                    path=row[2],
+                    content=row[5],
+                    symbol_name=row[8],
+                    bm25_score=bm25_scores.get(row[0], 0.0),
                 )
                 result = SearchResult(
-                    repo=row[0],
-                    path=row[1],
-                    start_line=row[2],
-                    end_line=row[3],
-                    snippet=row[4],
+                    repo=row[1],
+                    path=row[2],
+                    start_line=row[3],
+                    end_line=row[4],
+                    snippet=row[5],
                     score=float(parts["score"]),
-                    language=row[6],
-                    symbol_name=row[7],
-                    symbol_kind=row[8],
-                    symbol_line=row[9],
-                    symbol_confidence=row[10],
+                    language=row[7],
+                    symbol_name=row[8],
+                    symbol_kind=row[9],
+                    symbol_line=row[10],
+                    symbol_confidence=row[11],
                 )
                 rows.append({"result": result, "score": parts})
 
@@ -393,12 +428,18 @@ class SQLiteStorage:
             where.append("(repo_id = ? OR repo_path = ?)")
             params.extend([repo, repo])
         sql = f"""
-            SELECT path, content, embedding, symbol_name
+            SELECT chunk_id, path, content, embedding, symbol_name
             FROM chunks
             WHERE {' AND '.join(where)}
         """
         with self._connect() as conn:
-            for path, content, embedding_json, symbol_name in conn.execute(sql, params):
+            bm25_scores = fts_scores(
+                conn,
+                query_text=query_text,
+                embedding_model=embedding_model,
+                repo=repo,
+            )
+            for chunk_id, path, content, embedding_json, symbol_name in conn.execute(sql, params):
                 embedding = json.loads(embedding_json)
                 vector_score = cosine_similarity(query_embedding, embedding)
                 yield {
@@ -410,6 +451,7 @@ class SQLiteStorage:
                         path=path,
                         content=content,
                         symbol_name=symbol_name,
+                        bm25_score=bm25_scores.get(chunk_id, 0.0),
                     ),
                 }
 
@@ -585,6 +627,12 @@ class SQLiteStorage:
                     chunk_count INTEGER NOT NULL,
                     PRIMARY KEY(repo_id, path)
                 );
+
+                CREATE TABLE IF NOT EXISTS storage_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 """
             )
             ensure_column(
@@ -664,6 +712,27 @@ class SQLiteStorage:
                 CREATE INDEX IF NOT EXISTS idx_repos_repo_path ON repos(repo_path);
                 """
             )
+            if ensure_fts_table(conn):
+                current_fts_version = meta_value(conn, "fts_index_version")
+                if current_fts_version != FTS_INDEX_VERSION:
+                    backfill_fts(conn)
+                    set_meta_value(conn, "fts_index_version", FTS_INDEX_VERSION)
+
+
+def meta_value(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM storage_meta WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def set_meta_value(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO storage_meta(key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
 
 
 def ensure_column(
@@ -737,6 +806,125 @@ def insert_chunks(conn: sqlite3.Connection, rows: Sequence[tuple[object, ...]]) 
         """,
         rows,
     )
+    insert_fts_rows(conn, rows)
+
+
+def ensure_fts_table(conn: sqlite3.Connection) -> bool:
+    try:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                chunk_id UNINDEXED,
+                repo_id UNINDEXED,
+                path,
+                symbol_name,
+                content
+            )
+            """
+        )
+        return True
+    except sqlite3.OperationalError as exc:
+        if "no such module" in str(exc).lower() and "fts5" in str(exc).lower():
+            return False
+        raise
+
+
+def optional_fts_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "no such table: chunks_fts" in message or (
+        "no such module" in message and "fts5" in message
+    )
+
+
+def delete_fts_for_repo(conn: sqlite3.Connection, repo_id: str) -> None:
+    try:
+        conn.execute("DELETE FROM chunks_fts WHERE repo_id = ?", (repo_id,))
+    except sqlite3.OperationalError as exc:
+        if not optional_fts_error(exc):
+            raise
+
+
+def delete_fts_for_path(conn: sqlite3.Connection, repo_id: str, path: str) -> None:
+    try:
+        conn.execute(
+            """
+            DELETE FROM chunks_fts
+            WHERE chunk_id IN (
+                SELECT chunk_id FROM chunks WHERE repo_id = ? AND path = ?
+            )
+            """,
+            (repo_id, path),
+        )
+    except sqlite3.OperationalError as exc:
+        if not optional_fts_error(exc):
+            raise
+
+
+def insert_fts_rows(conn: sqlite3.Connection, rows: Sequence[tuple[object, ...]]) -> None:
+    if not rows:
+        return
+    try:
+        conn.executemany(
+            """
+            INSERT INTO chunks_fts(chunk_id, repo_id, path, symbol_name, content)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row[0],
+                    row[1],
+                    normalized_fts_text(str(row[3])),
+                    normalized_fts_text(str(row[5] or "")),
+                    normalized_fts_text(str(row[12])),
+                )
+                for row in rows
+            ],
+        )
+    except sqlite3.OperationalError as exc:
+        if not optional_fts_error(exc):
+            raise
+
+
+def backfill_fts(conn: sqlite3.Connection, batch_size: int = 1000) -> None:
+    try:
+        conn.execute("DELETE FROM chunks_fts")
+    except sqlite3.OperationalError as exc:
+        if optional_fts_error(exc):
+            return
+        raise
+    cursor = conn.execute(
+        """
+        SELECT
+            c.chunk_id,
+            c.repo_id,
+            c.repo_path,
+            c.path,
+            c.language,
+            c.symbol_name,
+            c.symbol_kind,
+            c.symbol_line,
+            c.symbol_confidence,
+            c.start_line,
+            c.end_line,
+            c.commit_sha,
+            c.content,
+            c.content_hash,
+            '' AS embedding,
+            c.embedding_model,
+            c.chunker_version,
+            c.indexed_at
+        FROM chunks c
+        """
+    )
+    while True:
+        rows = cursor.fetchmany(batch_size)
+        if not rows:
+            break
+        insert_fts_rows(conn, rows)
+
+
+def normalized_fts_text(text: str) -> str:
+    return " ".join(tokenize_code(text))
 
 
 def chunk_id_for(chunk: Chunk) -> str:
@@ -769,12 +957,18 @@ def hybrid_score(
     path: str,
     content: str,
     symbol_name: str | None,
+    bm25_score: float = 0.0,
 ) -> float:
-    normalized_vector = max(0.0, min(1.0, (vector_score + 1.0) / 2.0))
-    lexical = token_overlap(query_text, content)
-    symbol = symbol_match_score(query_text, symbol_name)
-    path_score = token_overlap(query_text, path.replace("/", " ").replace(".", " "))
-    return (0.60 * normalized_vector) + (0.24 * lexical) + (0.09 * symbol) + (0.07 * path_score)
+    return float(
+        score_breakdown(
+            query_text=query_text,
+            vector_score=vector_score,
+            path=path,
+            content=content,
+            symbol_name=symbol_name,
+            bm25_score=bm25_score,
+        )["base"]
+    )
 
 
 def adjusted_hybrid_score(
@@ -784,6 +978,7 @@ def adjusted_hybrid_score(
     path: str,
     content: str,
     symbol_name: str | None,
+    bm25_score: float = 0.0,
 ) -> float:
     return float(
         score_breakdown(
@@ -792,6 +987,7 @@ def adjusted_hybrid_score(
             path=path,
             content=content,
             symbol_name=symbol_name,
+            bm25_score=bm25_score,
         )["score"]
     )
 
@@ -803,12 +999,19 @@ def score_breakdown(
     path: str,
     content: str,
     symbol_name: str | None,
+    bm25_score: float = 0.0,
 ) -> dict[str, float]:
     normalized_vector = max(0.0, min(1.0, (vector_score + 1.0) / 2.0))
     lexical = token_overlap(query_text, content)
     symbol = symbol_match_score(query_text, symbol_name)
     path_score = token_overlap(query_text, path.replace("/", " ").replace(".", " "))
-    base = (0.60 * normalized_vector) + (0.24 * lexical) + (0.09 * symbol) + (0.07 * path_score)
+    base = (
+        (0.50 * normalized_vector)
+        + (0.20 * lexical)
+        + (0.14 * bm25_score)
+        + (0.09 * symbol)
+        + (0.07 * path_score)
+    )
     multiplier = path_rank_multiplier(query_text, path)
     return {
         "raw_vector": vector_score,
@@ -816,6 +1019,7 @@ def score_breakdown(
         "lexical": lexical,
         "symbol": symbol,
         "path": path_score,
+        "bm25": bm25_score,
         "path_multiplier": multiplier,
         "base": base,
         "score": base * multiplier,
@@ -868,6 +1072,65 @@ def is_generated_path(path: str) -> bool:
         or path.endswith("_pb2_grpc.py")
         or "/generated/" in path
     )
+
+
+def fts_scores(
+    conn: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = 200,
+) -> dict[str, float]:
+    fts_query = fts_query_for(query_text)
+    if not fts_query:
+        return {}
+    where = ["chunks_fts MATCH ?", "c.embedding_model = ?"]
+    params: list[object] = [fts_query, embedding_model]
+    if repo:
+        where.append("(c.repo_id = ? OR c.repo_path = ?)")
+        params.extend([repo, repo])
+    if path_prefix:
+        where.append("c.path LIKE ?")
+        params.append(f"{path_prefix}%")
+    if language:
+        where.append("c.language = ?")
+        params.append(language)
+    params.append(limit)
+    sql = f"""
+        SELECT f.chunk_id, bm25(chunks_fts) AS rank
+        FROM chunks_fts f
+        JOIN chunks c ON c.chunk_id = f.chunk_id
+        WHERE {' AND '.join(where)}
+        ORDER BY rank
+        LIMIT ?
+    """
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "fts5" in str(exc).lower() or "no such table" in str(exc).lower():
+            return {}
+        raise
+    if not rows:
+        return {}
+    ranks = [float(row[1]) for row in rows]
+    best = min(ranks)
+    worst = max(ranks)
+    if best == worst:
+        confidence = 1.0 if len(rows) == 1 else 0.25
+        return {row[0]: confidence for row in rows}
+    return {row[0]: (worst - float(row[1])) / (worst - best) for row in rows}
+
+
+def fts_query_for(query_text: str) -> str:
+    tokens = [
+        token
+        for token in tokenize_code(query_text)
+        if len(token) > 2 and token not in FTS_STOPWORDS
+    ]
+    return " OR ".join(dict.fromkeys(tokens[:12]))
 
 
 def diversify_results(

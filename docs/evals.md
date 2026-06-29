@@ -35,7 +35,7 @@ repo-index eval-add evals/golden.repo-index-mcp.jsonl \
   --expected-text "def retry"
 ```
 
-Debug output includes per-case top results, score components, docs/generated counts, duplicate path counts, and miss diagnostics.
+Debug output includes per-case top results, score components (vector, lexical, BM25, symbol, path), docs/generated counts, duplicate path counts, and miss diagnostics.
 
 Rules:
 
