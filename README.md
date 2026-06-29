@@ -7,7 +7,7 @@ Local codebase retrieval tool for coding agents. It indexes committed code from 
 From GitHub with `pipx`:
 
 ```bash
-pipx install git+https://github.com/Zhachory1/repo-index-mcp.git
+pipx install git+https://github.com/Zhachory1/repo-index-mcp.git@v0.1.1
 ```
 
 For development:
@@ -26,6 +26,8 @@ repo-index doctor
 
 ## First success path
 
+For a deterministic five-minute smoke test, see `docs/getting-started.md`.
+
 Index this repo or another local git repo:
 
 ```bash
@@ -36,6 +38,12 @@ Query it:
 
 ```bash
 repo-index query "where is request retry handled" -k 5
+```
+
+Lookup a symbol:
+
+```bash
+repo-index get-symbol RepoIndex --repo /path/to/git/repo
 ```
 
 Discover and index every git repo under a root:
@@ -64,12 +72,16 @@ Agent config example:
 {
   "mcpServers": {
     "repo-index": {
-      "command": "repo-index",
-      "args": ["serve"]
+      "type": "stdio",
+      "command": "/Users/YOU/.local/bin/repo-index",
+      "args": ["--db", "/Users/YOU/.repo-index-mcp/index.sqlite", "serve"],
+      "env": {}
     }
   }
 }
 ```
+
+Use `which repo-index` to find the absolute command path for your machine.
 
 ## Freshness hooks
 
@@ -87,6 +99,19 @@ repo-index --db <db> reindex "$PWD"
 ```
 
 They preserve the selected DB path and must not fail git commands.
+
+## Docs
+
+- `docs/getting-started.md` — install to first useful query.
+- `docs/mcp-clients.md` — MCP config examples.
+- `docs/troubleshooting.md` — common setup/query/freshness issues.
+- `docs/cli-reference.md` — command reference.
+- `docs/output-schema.md` — JSON fields.
+- `docs/evals.md` — eval authoring and gate.
+- `docs/pilot.md` — 5-engineer pilot measurement plan.
+- `docs/language-support.md` — parser/regex/window support matrix.
+- `docs/recipes.md` — common operations.
+- `docs/upgrade-uninstall.md` — lifecycle commands.
 
 ## Evals
 

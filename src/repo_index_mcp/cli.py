@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,25 @@ def main(argv: list[str] | None = None) -> int:
             k=args.k,
         )
         print(json.dumps([asdict(result) for result in results], indent=2))
+        if not results:
+            print(
+                "No results. Run `repo-index status`; if no repos are indexed, run "
+                "`repo-index index /path/to/repo` or `repo-index index-root ~/code`.",
+                file=sys.stderr,
+            )
+        return 0
+
+    if args.command == "get-symbol":
+        engine = RepoIndex(db_path=args.db)
+        result = engine.get_symbol(args.name, repo=args.repo)
+        if result is None:
+            print("null")
+            print(
+                "No symbol found. Try `repo-index query <name>` or reindex the repo.",
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps(asdict(result), indent=2))
         return 0
 
     if args.command == "status":
@@ -114,6 +134,10 @@ def build_parser() -> argparse.ArgumentParser:
     query = subparsers.add_parser("query", help="query indexed code")
     query.add_argument("query")
     add_query_args(query)
+
+    get_symbol = subparsers.add_parser("get-symbol", help="lookup a symbol definition")
+    get_symbol.add_argument("name")
+    get_symbol.add_argument("--repo")
 
     status = subparsers.add_parser("status", help="list indexed repos")
     status.set_defaults(_status=True)

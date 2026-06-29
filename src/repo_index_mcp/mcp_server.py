@@ -36,7 +36,7 @@ def run_server(*, db_path: str | Path = DEFAULT_DB_PATH) -> None:
 
     @mcp.tool()
     def get_symbol(name: str, repo: str | None = None) -> dict[str, Any] | None:
-        """Best-effort symbol lookup backed by search until AST symbols land."""
+        """Look up a symbol from indexed metadata, falling back to search."""
         result = engine.get_symbol(name, repo=repo)
         if result is None:
             return None
