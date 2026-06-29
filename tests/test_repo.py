@@ -36,6 +36,7 @@ def test_discover_repos_detects_gitfile_worktree_shape(tmp_path: Path) -> None:
 def test_skip_rules() -> None:
     assert should_skip(".env") is True
     assert should_skip("node_modules/pkg/index.js") is True
+    assert should_skip("rokt/rdn/raw/v1/create.pb.go") is True
     assert should_skip("src/app.py") is False
     assert should_prune_dir("node_modules") is True
 
