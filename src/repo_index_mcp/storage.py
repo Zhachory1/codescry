@@ -12,6 +12,23 @@ from repo_index_mcp.models import Chunk, SearchResult
 
 BUSY_TIMEOUT_MS = 5000
 FTS_INDEX_VERSION = "fts-v1"
+QUERY_EXPANSIONS = {
+    "retry": {"backoff", "attempt", "attempts"},
+    "backoff": {"retry", "attempt", "attempts"},
+    "auth": {"token", "credential", "credentials"},
+    "token": {"auth", "credential", "credentials"},
+    "credential": {"auth", "token", "credentials"},
+    "credentials": {"auth", "token", "credential"},
+    "route": {"endpoint", "handler"},
+    "endpoint": {"route", "handler"},
+    "handler": {"route", "endpoint"},
+    "config": {"setting", "settings", "option", "options"},
+    "setting": {"config", "option"},
+    "settings": {"config", "options"},
+    "option": {"config", "setting"},
+    "options": {"config", "settings"},
+}
+
 FTS_STOPWORDS = {
     "the",
     "and",
@@ -291,23 +308,6 @@ class SQLiteStorage:
             where.append("language = ?")
             params.append(language)
 
-        sql = f"""
-            SELECT
-                chunk_id,
-                repo_id,
-                path,
-                start_line,
-                end_line,
-                content,
-                embedding,
-                language,
-                symbol_name,
-                symbol_kind,
-                symbol_line,
-                symbol_confidence
-            FROM chunks
-            WHERE {' AND '.join(where)}
-        """
         rows: list[dict[str, object]] = []
         with self._connect() as conn:
             bm25_scores = fts_scores(
@@ -318,6 +318,23 @@ class SQLiteStorage:
                 path_prefix=path_prefix,
                 language=language,
             )
+            sql = f"""
+                SELECT
+                    chunk_id,
+                    repo_id,
+                    path,
+                    start_line,
+                    end_line,
+                    content,
+                    embedding,
+                    language,
+                    symbol_name,
+                    symbol_kind,
+                    symbol_line,
+                    symbol_confidence
+                FROM chunks
+                WHERE {' AND '.join(where)}
+            """
             for row in conn.execute(sql, params):
                 embedding = json.loads(row[6])
                 vector_score = cosine_similarity(query_embedding, embedding)
@@ -1042,20 +1059,19 @@ def wants_docs_query(query_text: str) -> bool:
     if any(keyword in normalized for keyword in ("prd", "sedd", "readme")):
         return True
     query_tokens = set(tokenize_code(query_text))
-    return bool(
-        query_tokens
-        & {
-            "doc",
-            "docs",
-            "plan",
-            "phase",
-            "install",
-            "mcp",
-            "config",
-            "security",
-            "pilot",
-        }
-    )
+    explicit_doc_tokens = {
+        "doc",
+        "docs",
+        "plan",
+        "phase",
+        "install",
+        "config",
+        "security",
+        "pilot",
+    }
+    if query_tokens & explicit_doc_tokens:
+        return True
+    return False
 
 
 def is_docs_path(path: str) -> bool:
@@ -1124,13 +1140,21 @@ def fts_scores(
     return {row[0]: (worst - float(row[1])) / (worst - best) for row in rows}
 
 
+def expand_query_text(query_text: str) -> str:
+    tokens = tokenize_code(query_text)
+    expanded: list[str] = list(tokens)
+    for token in tokens:
+        expanded.extend(sorted(QUERY_EXPANSIONS.get(token, ())))
+    return " ".join(dict.fromkeys(expanded))
+
+
 def fts_query_for(query_text: str) -> str:
     tokens = [
         token
-        for token in tokenize_code(query_text)
+        for token in tokenize_code(expand_query_text(query_text))
         if len(token) > 2 and token not in FTS_STOPWORDS
     ]
-    return " OR ".join(dict.fromkeys(tokens[:12]))
+    return " OR ".join(dict.fromkeys(tokens[:16]))
 
 
 def diversify_results(
