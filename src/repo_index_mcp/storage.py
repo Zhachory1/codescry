@@ -650,7 +650,7 @@ def hybrid_score(
     lexical = token_overlap(query_text, content)
     symbol = symbol_match_score(query_text, symbol_name)
     path_score = token_overlap(query_text, path.replace("/", " ").replace(".", " "))
-    return (0.70 * normalized_vector) + (0.20 * lexical) + (0.07 * symbol) + (0.03 * path_score)
+    return (0.60 * normalized_vector) + (0.24 * lexical) + (0.09 * symbol) + (0.07 * path_score)
 
 
 def token_overlap(query_text: str, candidate_text: str) -> float:

@@ -82,10 +82,10 @@ Start simple and deterministic. No learned weights.
 Initial formula:
 
 ```text
-score = (0.70 * normalized_vector_score)
-      + (0.20 * lexical_overlap_score)
-      + (0.07 * symbol_match_score)
-      + (0.03 * path_match_score)
+score = (0.60 * normalized_vector_score)
+      + (0.24 * lexical_overlap_score)
+      + (0.09 * symbol_match_score)
+      + (0.07 * path_match_score)
 ```
 
 Tie-breaks:
