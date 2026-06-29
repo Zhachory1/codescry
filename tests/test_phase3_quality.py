@@ -6,7 +6,13 @@ import pytest
 from repo_index_mcp.chunking import LineChunker, find_regex_symbols
 from repo_index_mcp.engine import RepoIndex
 from repo_index_mcp.models import Chunk, SearchResult
-from repo_index_mcp.storage import SQLiteStorage, hybrid_score, search_sort_key
+from repo_index_mcp.storage import (
+    SQLiteStorage,
+    diversify_results,
+    hybrid_score,
+    path_rank_multiplier,
+    search_sort_key,
+)
 
 
 def test_python_ast_function_chunk_has_parser_symbol() -> None:
@@ -155,6 +161,24 @@ def test_search_sort_key_prefers_parser_shorter_path_and_earlier_line() -> None:
     )
 
     assert search_sort_key(parser) > search_sort_key(regex)
+
+
+def test_docs_paths_downrank_for_implementation_queries() -> None:
+    assert path_rank_multiplier("where is retry implemented", "docs/phase-3-plan.md") < 1.0
+    assert path_rank_multiplier("readme install mcp config", "docs/mcp-clients.md") == 1.0
+
+
+def test_diversify_results_limits_per_file() -> None:
+    results = [
+        SearchResult("repo", "a.py", 1, 1, "", 1.0, "python"),
+        SearchResult("repo", "a.py", 2, 2, "", 0.9, "python"),
+        SearchResult("repo", "a.py", 3, 3, "", 0.8, "python"),
+        SearchResult("repo", "b.py", 1, 1, "", 0.7, "python"),
+    ]
+
+    diversified = diversify_results(results, k=3, max_per_file=2)
+
+    assert [result.path for result in diversified] == ["a.py", "a.py", "b.py"]
 
 
 def test_get_symbol_uses_symbol_metadata(tmp_path: Path) -> None:

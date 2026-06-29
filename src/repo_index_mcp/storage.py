@@ -263,7 +263,7 @@ class SQLiteStorage:
             for row in conn.execute(sql, params):
                 embedding = json.loads(row[5])
                 vector_score = cosine_similarity(query_embedding, embedding)
-                score = hybrid_score(
+                score = adjusted_hybrid_score(
                     query_text=query_text,
                     vector_score=vector_score,
                     path=row[1],
@@ -287,7 +287,9 @@ class SQLiteStorage:
                 )
 
         results.sort(key=search_sort_key, reverse=True)
-        return results[:k]
+        if wants_docs_query(query_text):
+            return results[:k]
+        return diversify_results(results, k)
 
     def find_symbol(
         self,
@@ -651,6 +653,92 @@ def hybrid_score(
     symbol = symbol_match_score(query_text, symbol_name)
     path_score = token_overlap(query_text, path.replace("/", " ").replace(".", " "))
     return (0.60 * normalized_vector) + (0.24 * lexical) + (0.09 * symbol) + (0.07 * path_score)
+
+
+def adjusted_hybrid_score(
+    *,
+    query_text: str,
+    vector_score: float,
+    path: str,
+    content: str,
+    symbol_name: str | None,
+) -> float:
+    score = hybrid_score(
+        query_text=query_text,
+        vector_score=vector_score,
+        path=path,
+        content=content,
+        symbol_name=symbol_name,
+    )
+    return score * path_rank_multiplier(query_text, path)
+
+
+def path_rank_multiplier(query_text: str, path: str) -> float:
+    normalized = path.lower()
+    if wants_docs_query(query_text):
+        return 1.0
+    if is_generated_path(normalized):
+        return 0.55
+    if is_docs_path(normalized):
+        return 0.70
+    return 1.0
+
+
+def wants_docs_query(query_text: str) -> bool:
+    normalized = query_text.lower()
+    if any(keyword in normalized for keyword in ("prd", "sedd", "readme")):
+        return True
+    query_tokens = set(tokenize_code(query_text))
+    return bool(
+        query_tokens
+        & {
+            "doc",
+            "docs",
+            "plan",
+            "phase",
+            "install",
+            "mcp",
+            "config",
+            "security",
+            "pilot",
+        }
+    )
+
+
+def is_docs_path(path: str) -> bool:
+    name = path.rsplit("/", maxsplit=1)[-1]
+    return path.startswith("docs/") or name in {"readme.md", "security.md"}
+
+
+def is_generated_path(path: str) -> bool:
+    return (
+        path.startswith("evals/results/")
+        or path.endswith(".pb.go")
+        or path.endswith(".pb.gw.go")
+        or path.endswith("_pb2.py")
+        or path.endswith("_pb2_grpc.py")
+        or "/generated/" in path
+    )
+
+
+def diversify_results(
+    results: list[SearchResult],
+    k: int,
+    max_per_file: int = 2,
+) -> list[SearchResult]:
+    selected: list[SearchResult] = []
+    counts: dict[tuple[str, str], int] = {}
+    deferred: list[SearchResult] = []
+    for result in results:
+        key = (result.repo, result.path)
+        if counts.get(key, 0) < max_per_file:
+            selected.append(result)
+            counts[key] = counts.get(key, 0) + 1
+        else:
+            deferred.append(result)
+        if len(selected) == k:
+            return selected
+    return (selected + deferred)[:k]
 
 
 def token_overlap(query_text: str, candidate_text: str) -> float:
