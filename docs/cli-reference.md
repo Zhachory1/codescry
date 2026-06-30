@@ -19,8 +19,9 @@ repo-index query "retry backoff" --repo /path/to/repo --path-prefix src/ --langu
 repo-index get-symbol RepoIndex --repo /path/to/repo
 repo-index status
 repo-index backfill-vectors
-# Experimental: enable vector+FTS candidate union for broad searches
-REPO_INDEX_ENABLE_CANDIDATE_UNION=1 repo-index query "retry backoff" -k 5
+# Candidate union is used automatically after vector coverage is complete.
+# Disable it for comparison/debugging with:
+REPO_INDEX_DISABLE_CANDIDATE_UNION=1 repo-index query "retry backoff" -k 5
 repo-index reindex /path/to/repo
 repo-index install-hooks /path/to/repo
 repo-index install-hooks ~/code --recursive

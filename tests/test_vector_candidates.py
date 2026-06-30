@@ -77,6 +77,69 @@ def test_backfill_vectors_indexes_existing_chunks(tmp_path):  # type: ignore[no-
     assert storage.backfill_vectors() == 1
 
 
+def test_default_candidate_union_preserves_vector_hit_with_fts_distractors(
+    tmp_path,
+    monkeypatch,
+):  # type: ignore[no-untyped-def]
+    storage = SQLiteStorage(tmp_path / "index.sqlite")
+    provider = HashEmbeddingProvider()
+    target = make_chunk("def rate_limit(): pass", path="src/rate_limit.py")
+    distractors = [
+        make_chunk(f"def throttling_distractor_{index}(): pass", path=f"src/distractor_{index}.py")
+        for index in range(80)
+    ]
+    chunks = [target, *distractors]
+    for chunk in chunks:
+        storage.replace_file_chunks(
+            repo_id="repo",
+            path=chunk.path,
+            content_hash=chunk.path,
+            chunks=[chunk],
+            embeddings=[provider.embed(chunk.content)],
+            commit_sha="commit",
+            embedding_model=provider.model_id,
+            chunker_version="chunker",
+        )
+    storage.backfill_vectors()
+    monkeypatch.setenv("REPO_INDEX_CANDIDATE_THRESHOLD", "1")
+    with storage._connect() as conn:  # noqa: SLF001
+        assert should_try_candidate_union(
+            conn,
+            query_text="rate_limit throttling",
+            embedding_model=provider.model_id,
+            repo=None,
+            path_prefix=None,
+            language=None,
+            k=5,
+        ) is True
+
+    union_results = storage.search(
+        query_embedding=provider.embed("rate_limit throttling"),
+        embedding_model=provider.model_id,
+        k=5,
+        query_text="rate_limit throttling",
+    )
+    monkeypatch.setenv("REPO_INDEX_DISABLE_CANDIDATE_UNION", "1")
+    with storage._connect() as conn:  # noqa: SLF001
+        assert should_try_candidate_union(
+            conn,
+            query_text="rate_limit throttling",
+            embedding_model=provider.model_id,
+            repo=None,
+            path_prefix=None,
+            language=None,
+            k=5,
+        ) is False
+    full_scan_results = storage.search(
+        query_embedding=provider.embed("rate_limit throttling"),
+        embedding_model=provider.model_id,
+        k=5,
+        query_text="rate_limit throttling",
+    )
+
+    assert union_results[0].path == full_scan_results[0].path == "src/rate_limit.py"
+
+
 def test_candidate_union_requires_vector_candidates(tmp_path):  # type: ignore[no-untyped-def]
     storage = SQLiteStorage(tmp_path / "index.sqlite")
     with storage._connect() as conn:  # noqa: SLF001

@@ -1411,7 +1411,7 @@ def should_try_candidate_union(
     language: str | None,
     k: int | None,
 ) -> bool:
-    if os.environ.get("REPO_INDEX_ENABLE_CANDIDATE_UNION") != "1":
+    if os.environ.get("REPO_INDEX_DISABLE_CANDIDATE_UNION") == "1":
         return False
     if k is None or wants_docs_query(query_text):
         return False
