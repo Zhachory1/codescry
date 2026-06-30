@@ -1,0 +1,38 @@
+{
+  "name": "repo-index-mcp",
+  "version": "0.2.2",
+  "description": "npm wrapper for the repo-index-mcp local codebase index CLI and MCP server",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zhachory1/repo-index-mcp.git"
+  },
+  "homepage": "https://github.com/Zhachory1/repo-index-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Zhachory1/repo-index-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "repo-index": "bin/repo-index.js",
+    "repo-index-mcp": "bin/repo-index.js"
+  },
+  "files": [
+    "bin/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "uv run pytest tests/test_npm_wrapper.py"
+  },
+  "keywords": [
+    "mcp",
+    "sqlite",
+    "code-search",
+    "retrieval",
+    "cli"
+  ]
+}

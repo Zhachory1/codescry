@@ -17,6 +17,25 @@
 
 Global `--db` must come before `serve`. Use `which repo-index` to find the absolute command path; GUI clients often do not inherit shell `PATH`.
 
+## npm/npx wrapper
+
+If `uv` is installed, the npm package can run the Python package through `uvx`:
+
+```json
+{
+  "mcpServers": {
+    "repo-index": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "repo-index-mcp", "--db", "/Users/YOU/.repo-index-mcp/index.sqlite", "serve"],
+      "env": {}
+    }
+  }
+}
+```
+
+The npm wrapper ships code only. The SQLite index remains local derived data at the configured `--db` path.
+
 ## Cave / mewrite / roktcode
 
 Config files used locally:
@@ -34,6 +53,7 @@ CLI checks:
 repo-index doctor
 repo-index status
 repo-index query hello_world -k 1
+npx repo-index-mcp doctor
 ```
 
 Client checks:

@@ -12,6 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - name: Install dev package
         run: python -m pip install -e '.[dev]'
       - name: Lint
@@ -20,6 +23,8 @@ jobs:
         run: pytest -q
       - name: Eval gate
         run: repo-index --db .repo-index-mcp/ci.sqlite eval evals/golden.repo-index-mcp.jsonl . -k 10 --fail-under 0.85
+      - name: NPM package dry-run
+        run: npm pack --dry-run
       - name: Build package
         run: python -m build
       - name: Installed console smoke

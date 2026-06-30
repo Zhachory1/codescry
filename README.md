@@ -10,6 +10,14 @@ From GitHub with `pipx`:
 pipx install git+https://github.com/Zhachory1/repo-index-mcp.git@v0.1.3
 ```
 
+With npm/npx, after installing [`uv`](https://docs.astral.sh/uv/getting-started/installation/):
+
+```bash
+npx repo-index-mcp doctor
+```
+
+The npm package is a thin wrapper around the Python package. It does not bundle local SQLite index data.
+
 For development:
 
 ```bash
@@ -81,7 +89,22 @@ Agent config example:
 }
 ```
 
-Use `which repo-index` to find the absolute command path for your machine.
+npm/npx config example:
+
+```json
+{
+  "mcpServers": {
+    "repo-index": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "repo-index-mcp", "--db", "/Users/YOU/.repo-index-mcp/index.sqlite", "serve"],
+      "env": {}
+    }
+  }
+}
+```
+
+Use `which repo-index` to find the absolute command path for your machine when using direct CLI installs.
 
 ## Freshness hooks
 
@@ -112,6 +135,7 @@ They preserve the selected DB path and must not fail git commands.
 - `docs/language-support.md` — parser/regex/window support matrix.
 - `docs/recipes.md` — common operations.
 - `docs/upgrade-uninstall.md` — lifecycle commands.
+- `docs/release.md` — PyPI-first and npm-wrapper release flow.
 
 ## Evals
 
