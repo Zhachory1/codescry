@@ -3,7 +3,7 @@
 ## Upgrade from GitHub
 
 ```bash
-pipx install --force git+https://github.com/Zhachory1/repo-index-mcp.git@v0.1.3
+pipx install --force git+https://github.com/Zhachory1/repo-index-mcp.git@v0.2.3
 ```
 
 ## Upgrade npm wrapper

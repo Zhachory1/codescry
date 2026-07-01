@@ -4,7 +4,7 @@
 
 - `git not found`: install git and ensure it is on `PATH`.
 - `db_writable` false: choose a writable DB path with `--db /path/to/index.sqlite`.
-- `mcp_dependency` false: reinstall with `pipx install --force git+https://github.com/Zhachory1/repo-index-mcp.git@v0.1.3`.
+- `mcp_dependency` false: reinstall with `pipx install --force git+https://github.com/Zhachory1/repo-index-mcp.git@v0.2.3`.
 - MCP server not appearing in GUI client: use an absolute `command` path from `which repo-index`, then restart the client.
 
 ## Query returns `[]`

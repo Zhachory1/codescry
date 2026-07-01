@@ -1,6 +1,6 @@
 {
   "name": "repo-index-mcp",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "npm wrapper for the repo-index-mcp local codebase index CLI and MCP server",
   "license": "MIT",
   "repository": {

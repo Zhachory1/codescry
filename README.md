@@ -7,7 +7,7 @@ Local codebase retrieval tool for coding agents. It indexes committed code from 
 From GitHub with `pipx`:
 
 ```bash
-pipx install git+https://github.com/Zhachory1/repo-index-mcp.git@v0.1.3
+pipx install git+https://github.com/Zhachory1/repo-index-mcp.git@v0.2.3
 ```
 
 With npm/npx, after installing [`uv`](https://docs.astral.sh/uv/getting-started/installation/):
