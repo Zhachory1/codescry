@@ -4,6 +4,7 @@ from repo_index_mcp.eval import (
     GoldenCase,
     find_rank,
     load_golden_cases,
+    mean_reciprocal_rank,
     run_recall_diagnostics,
     run_recall_eval,
 )
@@ -133,4 +134,36 @@ def test_run_recall_eval_reports_hits() -> None:
     assert report.total == 1
     assert report.hits == 1
     assert report.recall_at_k == 1.0
+    assert report.mrr == 1.0
     assert report.misses == []
+
+
+def test_mean_reciprocal_rank_handles_hits_and_misses() -> None:
+    assert mean_reciprocal_rank([1, 2, None]) == (1 + 0.5 + 0) / 3
+
+
+def test_run_recall_diagnostics_reports_rrf_active_count() -> None:
+    class RrfStubEngine(StubEngine):
+        def query_debug(
+            self,
+            query: str,
+            *,
+            k: int,
+            repo: str | None = None,
+        ):  # type: ignore[no-untyped-def]
+            rows = super().query_debug(query, k=k, repo=repo)
+            rows[0]["score"] = {
+                "ranking_mode": "rrf_v1",
+                "score": 1.0,
+                "rrf_score": 1.0,
+                "source_ranks": {"fts": 1, "vector": 1},
+                "source_contributions": {"fts": 1 / 61, "vector": 1 / 61},
+            }
+            return rows
+
+    cases = [GoldenCase(id="case-1", query="handle request", expected_path="src/app.py")]
+
+    report = run_recall_diagnostics(RrfStubEngine(), cases, k=10)  # type: ignore[arg-type]
+
+    assert report["rrf_active_count"] == 1
+    assert report["fallback_count"] == 0

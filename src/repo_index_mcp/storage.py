@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,11 @@ DEFAULT_CANDIDATE_THRESHOLD = 100_000
 DEFAULT_VECTOR_CANDIDATE_LIMIT = 2000
 DEFAULT_FTS_CANDIDATE_LIMIT = 200
 DEFAULT_UNION_FTS_CANDIDATE_LIMIT = 2000
+RRF_K = 60
+RRF_FETCH_MULTIPLIER = 4
+RRF_MIN_FETCH = 50
+RRF_MAX_FETCH = 500
+RRF_FILTERED_VECTOR_SCAN_LIMIT = 5000
 QUERY_EXPANSIONS = {
     "retry": {"backoff", "attempt", "attempts"},
     "backoff": {"retry", "attempt", "attempts"},
@@ -53,6 +59,14 @@ FTS_STOPWORDS = {
     "implemented",
     "implementation",
 }
+
+
+@dataclass(frozen=True)
+class RankedCandidate:
+    rowid: int
+    backend_score: float
+    path: str
+    start_line: int
 
 
 class SQLiteStorage:
@@ -323,7 +337,24 @@ class SQLiteStorage:
             params.append(language)
 
         rows: list[dict[str, object]] = []
+        rrf_disabled_reason: str | None = None
         with self._connect() as conn:
+            if rrf_ranking_enabled() and k is not None:
+                rrf_rows, rrf_disabled_reason = self._search_debug_rrf(
+                    conn=conn,
+                    query_embedding=query_embedding,
+                    embedding_model=embedding_model,
+                    k=k,
+                    query_text=query_text,
+                    repo=repo,
+                    path_prefix=path_prefix,
+                    language=language,
+                )
+                if rrf_rows:
+                    return rrf_rows
+            elif rrf_ranking_enabled():
+                rrf_disabled_reason = "k_none"
+
             union_preflight = should_try_candidate_union(
                 conn,
                 query_text=query_text,
@@ -404,6 +435,13 @@ class SQLiteStorage:
                     symbol_name=row[9],
                     bm25_score=bm25_scores.get(row[0], 0.0),
                 )
+                if rrf_disabled_reason is not None:
+                    parts = {
+                        **parts,
+                        "ranking_mode": "current",
+                        "rrf_requested": True,
+                        "rrf_disabled_reason": rrf_disabled_reason,
+                    }
                 result = SearchResult(
                     repo=row[2],
                     path=row[3],
@@ -427,6 +465,126 @@ class SQLiteStorage:
         selected = diversify_results([item["result"] for item in rows], k)
         debug_by_result_id = {id(item["result"]): item for item in rows}
         return [debug_by_result_id[id(result)] for result in selected]
+
+    def _search_debug_rrf(
+        self,
+        *,
+        conn: sqlite3.Connection,
+        query_embedding: list[float],
+        embedding_model: str,
+        k: int,
+        query_text: str,
+        repo: str | None,
+        path_prefix: str | None,
+        language: str | None,
+    ) -> tuple[list[dict[str, object]], str | None]:
+        fts_candidates = ranked_fts_candidates(
+            conn,
+            query_text=query_text,
+            embedding_model=embedding_model,
+            repo=repo,
+            path_prefix=path_prefix,
+            language=language,
+            limit=DEFAULT_UNION_FTS_CANDIDATE_LIMIT,
+        )
+        if not fts_candidates:
+            return [], "no_fts_candidates"
+        if not vector_table_exists(conn):
+            return [], "vector_table_missing"
+        if not vector_coverage_complete(conn, embedding_model=embedding_model):
+            return [], "vector_coverage_incomplete"
+        vector_candidates = ranked_vector_candidates(
+            conn,
+            query_embedding=query_embedding,
+            embedding_model=embedding_model,
+            repo=repo,
+            path_prefix=path_prefix,
+            language=language,
+            limit=DEFAULT_VECTOR_CANDIDATE_LIMIT,
+        )
+        if not vector_candidates:
+            return [], "no_vector_candidates"
+
+        ordered_rowids, traces = rrf_fuse(
+            fts_candidates=fts_candidates,
+            vector_candidates=vector_candidates,
+        )
+        fetch_limit = min(RRF_MAX_FETCH, max(RRF_MIN_FETCH, k * RRF_FETCH_MULTIPLIER))
+        fetch_rowids = ordered_rowids[:fetch_limit]
+        if not fetch_rowids:
+            return [], "rrf_error"
+
+        conn.execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS rrf_candidate_rowids(
+                rowid INTEGER PRIMARY KEY,
+                rank_order INTEGER NOT NULL,
+                rrf_score REAL NOT NULL
+            )
+            """
+        )
+        conn.execute("DELETE FROM rrf_candidate_rowids")
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO rrf_candidate_rowids(rowid, rank_order, rrf_score)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (rowid, index, float(traces[rowid]["rrf_score"]))
+                for index, rowid in enumerate(fetch_rowids)
+            ],
+        )
+        rows: list[dict[str, object]] = []
+        sql = """
+            SELECT
+                c.rowid,
+                c.repo_id,
+                c.path,
+                c.start_line,
+                c.end_line,
+                c.content,
+                c.language,
+                c.symbol_name,
+                c.symbol_kind,
+                c.symbol_line,
+                c.symbol_confidence,
+                rc.rrf_score
+            FROM rrf_candidate_rowids rc
+            JOIN chunks c ON c.rowid = rc.rowid
+            ORDER BY rc.rank_order
+        """
+        for row in conn.execute(sql):
+            trace = traces[int(row[0])]
+            result = SearchResult(
+                repo=row[1],
+                path=row[2],
+                start_line=row[3],
+                end_line=row[4],
+                snippet=row[5],
+                score=float(row[11]),
+                language=row[6],
+                symbol_name=row[7],
+                symbol_kind=row[8],
+                symbol_line=row[9],
+                symbol_confidence=row[10],
+            )
+            rows.append(
+                {
+                    "result": result,
+                    "score": {
+                        "ranking_mode": "rrf_v1",
+                        "score": result.score,
+                        "rrf_score": result.score,
+                        "source_ranks": trace["source_ranks"],
+                        "source_contributions": trace["source_contributions"],
+                    },
+                }
+            )
+        if wants_docs_query(query_text):
+            return rows[:k], None
+        selected = diversify_results([item["result"] for item in rows], k)
+        debug_by_result_id = {id(item["result"]): item for item in rows}
+        return [debug_by_result_id[id(result)] for result in selected], None
 
     def expected_path_debug(
         self,
@@ -1253,6 +1411,194 @@ def vector_scores(
     if best == worst:
         return {int(row[0]): 1.0 for row in rows}
     return {int(row[0]): (worst - float(row[1])) / (worst - best) for row in rows}
+
+
+def ranked_vector_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query_embedding: list[float],
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = DEFAULT_VECTOR_CANDIDATE_LIMIT,
+) -> list[RankedCandidate]:
+    if repo or path_prefix or language:
+        return ranked_vector_candidates_by_scan(
+            conn,
+            query_embedding=query_embedding,
+            embedding_model=embedding_model,
+            repo=repo,
+            path_prefix=path_prefix,
+            language=language,
+            limit=limit,
+        )
+    sqlite_vec = load_sqlite_vec(conn)
+    if sqlite_vec is None or not ensure_vector_table(conn, len(query_embedding)):
+        return []
+    sql = """
+        SELECT c.rowid, v.distance, c.path, c.start_line
+        FROM chunk_vectors v
+        JOIN chunks c ON c.rowid = v.rowid AND c.chunk_id = v.chunk_id
+        WHERE v.embedding MATCH ? AND k = ? AND c.embedding_model = ?
+        ORDER BY v.distance ASC, c.path ASC, c.start_line ASC, c.rowid ASC
+    """
+    params: list[object] = [sqlite_vec.serialize_float32(query_embedding), limit, embedding_model]
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [
+        RankedCandidate(
+            rowid=int(row[0]),
+            backend_score=1.0 / (1.0 + max(float(row[1]), 0.0)),
+            path=str(row[2]),
+            start_line=int(row[3]),
+        )
+        for row in rows
+    ]
+
+
+def ranked_vector_candidates_by_scan(
+    conn: sqlite3.Connection,
+    *,
+    query_embedding: list[float],
+    embedding_model: str,
+    repo: str | None,
+    path_prefix: str | None,
+    language: str | None,
+    limit: int,
+) -> list[RankedCandidate]:
+    where = ["c.embedding_model = ?"]
+    params: list[object] = [embedding_model]
+    if repo:
+        where.append("(c.repo_id = ? OR c.repo_path = ?)")
+        params.extend([repo, repo])
+    if path_prefix:
+        where.append("c.path LIKE ?")
+        params.append(f"{path_prefix}%")
+    if language:
+        where.append("c.language = ?")
+        params.append(language)
+    count = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM chunks c WHERE {' AND '.join(where)}",
+            params,
+        ).fetchone()[0]
+    )
+    if count > RRF_FILTERED_VECTOR_SCAN_LIMIT:
+        return []
+    sql = f"""
+        SELECT c.rowid, c.embedding, c.path, c.start_line
+        FROM chunks c
+        WHERE {' AND '.join(where)}
+    """
+    candidates = []
+    for row in conn.execute(sql, params):
+        score = cosine_similarity(query_embedding, json.loads(row[1]))
+        candidates.append((int(row[0]), score, str(row[2]), int(row[3])))
+    candidates.sort(key=lambda item: (-item[1], item[2], item[3], item[0]))
+    return [
+        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
+        for rowid, score, path, start_line in candidates[:limit]
+    ]
+
+
+def ranked_fts_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = DEFAULT_FTS_CANDIDATE_LIMIT,
+) -> list[RankedCandidate]:
+    fts_query = fts_query_for(query_text)
+    if not fts_query:
+        return []
+    where = ["chunks_fts MATCH ?", "c.embedding_model = ?"]
+    params: list[object] = [fts_query, embedding_model]
+    if repo:
+        where.append("(c.repo_id = ? OR c.repo_path = ?)")
+        params.extend([repo, repo])
+    if path_prefix:
+        where.append("c.path LIKE ?")
+        params.append(f"{path_prefix}%")
+    if language:
+        where.append("c.language = ?")
+        params.append(language)
+    params.append(limit)
+    sql = f"""
+        SELECT c.rowid, bm25(chunks_fts) AS rank, c.path, c.start_line
+        FROM chunks_fts f
+        JOIN chunks c ON c.chunk_id = f.chunk_id
+        WHERE {' AND '.join(where)}
+        ORDER BY rank ASC, c.path ASC, c.start_line ASC, c.rowid ASC
+        LIMIT ?
+    """
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "fts5" in str(exc).lower() or "no such table" in str(exc).lower():
+            return []
+        raise
+    return [
+        RankedCandidate(
+            rowid=int(row[0]),
+            backend_score=abs(float(row[1])) / (1.0 + abs(float(row[1]))),
+            path=str(row[2]),
+            start_line=int(row[3]),
+        )
+        for row in rows
+    ]
+
+
+def rrf_ranking_enabled() -> bool:
+    return os.environ.get("CODESCRY_RRF_RANKING") == "1"
+
+
+def rrf_fuse(
+    *,
+    fts_candidates: Sequence[RankedCandidate],
+    vector_candidates: Sequence[RankedCandidate],
+    k: int = RRF_K,
+) -> tuple[list[int], dict[int, dict[str, object]]]:
+    candidate_by_rowid: dict[int, RankedCandidate] = {}
+    totals: dict[int, float] = {}
+    source_ranks: dict[int, dict[str, int]] = {}
+    source_contributions: dict[int, dict[str, float]] = {}
+
+    for source_name, candidates in (
+        ("fts", fts_candidates),
+        ("vector", vector_candidates),
+    ):
+        for rank, candidate in enumerate(candidates, start=1):
+            candidate_by_rowid.setdefault(candidate.rowid, candidate)
+            contribution = 1.0 / (k + rank)
+            totals[candidate.rowid] = totals.get(candidate.rowid, 0.0) + contribution
+            source_ranks.setdefault(candidate.rowid, {})[source_name] = rank
+            source_contributions.setdefault(candidate.rowid, {})[source_name] = contribution
+
+    ordered = sorted(
+        totals,
+        key=lambda rowid: (
+            -totals[rowid],
+            candidate_by_rowid[rowid].path,
+            candidate_by_rowid[rowid].start_line,
+            rowid,
+        ),
+    )
+    traces = {
+        rowid: {
+            "ranking_mode": "rrf_v1",
+            "rrf_score": totals[rowid],
+            "source_ranks": source_ranks.get(rowid, {}),
+            "source_contributions": source_contributions.get(rowid, {}),
+        }
+        for rowid in ordered
+    }
+    return ordered, traces
 
 
 def chunk_id_for(chunk: Chunk) -> str:
