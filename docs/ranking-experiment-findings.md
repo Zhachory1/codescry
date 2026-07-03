@@ -237,6 +237,78 @@ Finding:
 
 Ollama real embeddings improve self eval, requests, and pytest MRR, but regress Flask Recall@10 and add substantial latency. This is promising as an opt-in provider, not a default replacement.
 
+## Experiment 7: Ollama `mxbai-embed-large`
+
+Evaluated local Ollama `mxbai-embed-large` with a smaller external input limit:
+
+```bash
+CODESCRY_EMBEDDING_PROVIDER=ollama \
+CODESCRY_OLLAMA_MODEL=mxbai-embed-large \
+CODESCRY_EMBEDDING_MAX_CHARS=500 \
+codescry --db <db> eval <golden> <repo> -k 10
+```
+
+A lower `CODESCRY_EMBEDDING_MAX_CHARS` was needed because this model returned context-length errors on longer inputs.
+
+Results:
+
+| Dataset | Default hash | Ollama `mxbai-embed-large` |
+| --- | ---: | ---: |
+| self eval | 0.923 / ~0.687 | 0.962 / 0.909 |
+| requests | 0.520 / 0.388 | 0.560 / 0.460 |
+| flask | 0.800 / 0.523 | 0.800 / 0.545 |
+| pytest | 0.480 / 0.268 | 0.560 / 0.345 |
+
+Finding:
+
+`mxbai-embed-large` is the strongest local embedding provider tested so far. It improves MRR across all public datasets and improves pytest Recall@10, but needs aggressive truncation and has higher latency than hash embeddings.
+
+## Experiment 8: OpenAI `text-embedding-3-small`
+
+Evaluated hosted OpenAI embeddings on self, requests, and flask. Full pytest evaluation was stopped because the current single-request-per-chunk provider is too slow for the 15k+ chunk pytest repo.
+
+```bash
+CODESCRY_EMBEDDING_PROVIDER=openai \
+CODESCRY_OPENAI_MODEL=text-embedding-3-small \
+codescry --db <db> eval <golden> <repo> -k 10
+```
+
+Results:
+
+| Dataset | Default hash | OpenAI `text-embedding-3-small` |
+| --- | ---: | ---: |
+| self eval | 0.923 / ~0.687 | 0.923 / 0.833 |
+| requests | 0.520 / 0.388 | 0.600 / 0.483 |
+| flask | 0.800 / 0.523 | 0.760 / 0.553 |
+| pytest | 0.480 / 0.268 | not completed |
+
+Finding:
+
+OpenAI improves requests and MRR, but regresses flask Recall@10 and is too slow to evaluate on larger repos without batching. Do not recommend broad use until provider batching exists.
+
+## Experiment 9: sentence-transformers `BAAI/bge-small-en-v1.5`
+
+Evaluated local sentence-transformers embeddings:
+
+```bash
+CODESCRY_EMBEDDING_PROVIDER=sentence-transformers \
+CODESCRY_ST_MODEL=BAAI/bge-small-en-v1.5 \
+codescry --db <db> eval <golden> <repo> -k 10
+```
+
+Results:
+
+| Dataset | Default hash | BGE small |
+| --- | ---: | ---: |
+| self eval | 0.923 / ~0.687 | 0.923 / 0.846 |
+| requests | 0.520 / 0.388 | 0.600 / 0.465 |
+| flask | 0.800 / 0.523 | 0.720 / 0.514 |
+| pytest | 0.480 / 0.268 | 0.560 / 0.348 |
+
+Finding:
+
+BGE small improves requests and pytest, with better pytest latency than Ollama. It regresses flask Recall@10. It is a good opt-in local provider candidate, but not a clear default replacement.
+
 ## Overall findings
 
 1. Current hybrid ranking remains strongest default overall.
@@ -245,8 +317,10 @@ Ollama real embeddings improve self eval, requests, and pytest MRR, but regress 
 4. RRF with weak hash vectors does not reproduce qmd's likely benefit from stronger embeddings and reranking.
 5. Broad deterministic expansion is risky because it can add noisy candidates and dilute exact matches.
 6. Hash embedding tweaks can help one repo and hurt another.
-7. Ollama real embeddings are promising but too slow and mixed-quality for default.
-8. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
+7. Real embeddings improve MRR more reliably than rank-fusion tweaks, but still show repo-specific recall regressions.
+8. `mxbai-embed-large` and BGE small are the best local candidates tested so far.
+9. Hosted OpenAI needs batching before large-repo evaluation is practical.
+10. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
 
 ## Recommended next bets
 
@@ -257,7 +331,7 @@ The most likely large improvement is better embeddings, not more rank fusion. Op
 - local embedding model, opt-in
 - hosted embedding provider, explicit opt-in with data-boundary warning
 
-Ollama `nomic-embed-text` is good enough to keep as supported opt-in, but not good enough to make default.
+Ollama `mxbai-embed-large` and sentence-transformers BGE small are good enough to keep as supported opt-in providers, but not good enough to make default based on current evals.
 
 Requirements before shipping:
 

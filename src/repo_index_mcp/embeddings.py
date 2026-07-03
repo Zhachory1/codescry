@@ -193,7 +193,11 @@ class SentenceTransformerEmbeddingProvider:
         self.model_name = model
         self.max_chars = max_chars
         self._model = SentenceTransformer(model)
-        dimensions = self._model.get_sentence_embedding_dimension()
+        dimensions = (
+            self._model.get_embedding_dimension()
+            if hasattr(self._model, "get_embedding_dimension")
+            else self._model.get_sentence_embedding_dimension()
+        )
         self._dimensions = int(dimensions) if dimensions is not None else len(self.embed("probe"))
 
     @property
