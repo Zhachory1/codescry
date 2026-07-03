@@ -23,6 +23,9 @@ RRF_FETCH_MULTIPLIER = 4
 RRF_MIN_FETCH = 50
 RRF_MAX_FETCH = 500
 RRF_FILTERED_VECTOR_SCAN_LIMIT = 5000
+RRF_EXACT_SCAN_LIMIT = 5000
+RRF_TOP_RANK_BONUS = 0.05
+RRF_NEAR_TOP_RANK_BONUS = 0.02
 QUERY_EXPANSIONS = {
     "retry": {"backoff", "attempt", "attempts"},
     "backoff": {"retry", "attempt", "attempts"},
@@ -505,9 +508,49 @@ class SQLiteStorage:
         if not vector_candidates:
             return [], "no_vector_candidates"
 
+        extra_sources: list[tuple[str, Sequence[RankedCandidate]]] = []
+        if rrf_exact_lists_enabled():
+            extra_sources = [
+                (
+                    "path",
+                    ranked_path_candidates(
+                        conn,
+                        query_text=query_text,
+                        embedding_model=embedding_model,
+                        repo=repo,
+                        path_prefix=path_prefix,
+                        language=language,
+                    ),
+                ),
+                (
+                    "symbol",
+                    ranked_symbol_candidates(
+                        conn,
+                        query_text=query_text,
+                        embedding_model=embedding_model,
+                        repo=repo,
+                        path_prefix=path_prefix,
+                        language=language,
+                    ),
+                ),
+                (
+                    "lexical",
+                    ranked_lexical_candidates(
+                        conn,
+                        query_text=query_text,
+                        embedding_model=embedding_model,
+                        repo=repo,
+                        path_prefix=path_prefix,
+                        language=language,
+                    ),
+                ),
+            ]
+
         ordered_rowids, traces = rrf_fuse(
             fts_candidates=fts_candidates,
             vector_candidates=vector_candidates,
+            extra_sources=extra_sources,
+            top_rank_bonus=rrf_top_rank_bonus_enabled(),
         )
         fetch_limit = min(RRF_MAX_FETCH, max(RRF_MIN_FETCH, k * RRF_FETCH_MULTIPLIER))
         fetch_rowids = ordered_rowids[:fetch_limit]
@@ -577,6 +620,7 @@ class SQLiteStorage:
                         "rrf_score": result.score,
                         "source_ranks": trace["source_ranks"],
                         "source_contributions": trace["source_contributions"],
+                        "top_rank_bonus": trace.get("top_rank_bonus", 0.0),
                     },
                 }
             )
@@ -1504,6 +1548,146 @@ def ranked_vector_candidates_by_scan(
     ]
 
 
+def filtered_chunk_count(
+    conn: sqlite3.Connection,
+    *,
+    embedding_model: str,
+    repo: str | None,
+    path_prefix: str | None,
+    language: str | None,
+) -> tuple[int, list[str], list[object]]:
+    where = ["c.embedding_model = ?"]
+    params: list[object] = [embedding_model]
+    if repo:
+        where.append("(c.repo_id = ? OR c.repo_path = ?)")
+        params.extend([repo, repo])
+    if path_prefix:
+        where.append("c.path LIKE ?")
+        params.append(f"{path_prefix}%")
+    if language:
+        where.append("c.language = ?")
+        params.append(language)
+    count = int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM chunks c WHERE {' AND '.join(where)}",
+            params,
+        ).fetchone()[0]
+    )
+    return count, where, params
+
+
+def ranked_path_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = DEFAULT_FTS_CANDIDATE_LIMIT,
+) -> list[RankedCandidate]:
+    count, where, params = filtered_chunk_count(
+        conn,
+        embedding_model=embedding_model,
+        repo=repo,
+        path_prefix=path_prefix,
+        language=language,
+    )
+    if count > RRF_EXACT_SCAN_LIMIT:
+        return []
+    sql = f"""
+        SELECT c.rowid, c.path, c.start_line
+        FROM chunks c
+        WHERE {' AND '.join(where)}
+    """
+    candidates = []
+    for row in conn.execute(sql, params):
+        path = str(row[1])
+        score = path_exact_score(query_text, path)
+        if score > 0:
+            candidates.append((int(row[0]), score, path, int(row[2])))
+    candidates.sort(key=lambda item: (-item[1], item[2], item[3], item[0]))
+    return [
+        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
+        for rowid, score, path, start_line in candidates[:limit]
+    ]
+
+
+def ranked_symbol_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = DEFAULT_FTS_CANDIDATE_LIMIT,
+) -> list[RankedCandidate]:
+    count, where, params = filtered_chunk_count(
+        conn,
+        embedding_model=embedding_model,
+        repo=repo,
+        path_prefix=path_prefix,
+        language=language,
+    )
+    if count > RRF_EXACT_SCAN_LIMIT:
+        return []
+    where.append("c.symbol_name IS NOT NULL")
+    sql = f"""
+        SELECT c.rowid, c.path, c.start_line, c.symbol_name, c.symbol_confidence
+        FROM chunks c
+        WHERE {' AND '.join(where)}
+    """
+    candidates = []
+    for row in conn.execute(sql, params):
+        score = symbol_match_score(query_text, str(row[3]) if row[3] else None)
+        if row[4] == "parser" and score > 0:
+            score += 0.25
+        if score > 0:
+            candidates.append((int(row[0]), score, str(row[1]), int(row[2])))
+    candidates.sort(key=lambda item: (-item[1], item[2], item[3], item[0]))
+    return [
+        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
+        for rowid, score, path, start_line in candidates[:limit]
+    ]
+
+
+def ranked_lexical_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query_text: str,
+    embedding_model: str,
+    repo: str | None = None,
+    path_prefix: str | None = None,
+    language: str | None = None,
+    limit: int = DEFAULT_FTS_CANDIDATE_LIMIT,
+) -> list[RankedCandidate]:
+    count, where, params = filtered_chunk_count(
+        conn,
+        embedding_model=embedding_model,
+        repo=repo,
+        path_prefix=path_prefix,
+        language=language,
+    )
+    if count > RRF_EXACT_SCAN_LIMIT:
+        return []
+    sql = f"""
+        SELECT c.rowid, c.path, c.start_line, c.content
+        FROM chunks c
+        WHERE {' AND '.join(where)}
+    """
+    candidates = []
+    for row in conn.execute(sql, params):
+        score = token_overlap(query_text, str(row[3]))
+        if score > 0:
+            candidates.append((int(row[0]), score, str(row[1]), int(row[2])))
+    candidates.sort(key=lambda item: (-item[1], item[2], item[3], item[0]))
+    return [
+        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
+        for rowid, score, path, start_line in candidates[:limit]
+    ]
+
+
 def ranked_fts_candidates(
     conn: sqlite3.Connection,
     *,
@@ -1558,27 +1742,67 @@ def rrf_ranking_enabled() -> bool:
     return os.environ.get("CODESCRY_RRF_RANKING") == "1"
 
 
+def rrf_top_rank_bonus_enabled() -> bool:
+    return (
+        os.environ.get("CODESCRY_RRF_TOP_BONUS") == "1"
+        or os.environ.get("CODESCRY_RRF_QMD_STYLE") == "1"
+    )
+
+
+def rrf_exact_lists_enabled() -> bool:
+    return (
+        os.environ.get("CODESCRY_RRF_EXACT_LISTS") == "1"
+        or os.environ.get("CODESCRY_RRF_QMD_STYLE") == "1"
+    )
+
+
+def path_exact_score(query_text: str, path: str) -> float:
+    normalized_query = query_text.lower().strip().replace(" ", "_")
+    normalized_path = path.lower().replace("/", " ").replace(".", " ").replace("-", "_")
+    if normalized_query and normalized_query in normalized_path.replace(" ", "_"):
+        return 2.0
+    return token_overlap(query_text, normalized_path)
+
+
 def rrf_fuse(
     *,
     fts_candidates: Sequence[RankedCandidate],
     vector_candidates: Sequence[RankedCandidate],
+    extra_sources: Sequence[tuple[str, Sequence[RankedCandidate]]] = (),
+    top_rank_bonus: bool = False,
     k: int = RRF_K,
 ) -> tuple[list[int], dict[int, dict[str, object]]]:
     candidate_by_rowid: dict[int, RankedCandidate] = {}
     totals: dict[int, float] = {}
+    best_rank: dict[int, int] = {}
     source_ranks: dict[int, dict[str, int]] = {}
     source_contributions: dict[int, dict[str, float]] = {}
 
-    for source_name, candidates in (
+    sources: list[tuple[str, Sequence[RankedCandidate]]] = [
         ("fts", fts_candidates),
         ("vector", vector_candidates),
-    ):
+        *extra_sources,
+    ]
+    for source_name, candidates in sources:
         for rank, candidate in enumerate(candidates, start=1):
             candidate_by_rowid.setdefault(candidate.rowid, candidate)
+            best_rank[candidate.rowid] = min(rank, best_rank.get(candidate.rowid, rank))
             contribution = 1.0 / (k + rank)
             totals[candidate.rowid] = totals.get(candidate.rowid, 0.0) + contribution
             source_ranks.setdefault(candidate.rowid, {})[source_name] = rank
             source_contributions.setdefault(candidate.rowid, {})[source_name] = contribution
+
+    top_rank_bonuses: dict[int, float] = {}
+    if top_rank_bonus:
+        for rowid, rank in best_rank.items():
+            bonus = 0.0
+            if rank == 1:
+                bonus = RRF_TOP_RANK_BONUS
+            elif rank <= 3:
+                bonus = RRF_NEAR_TOP_RANK_BONUS
+            if bonus:
+                totals[rowid] += bonus
+                top_rank_bonuses[rowid] = bonus
 
     ordered = sorted(
         totals,
@@ -1595,6 +1819,7 @@ def rrf_fuse(
             "rrf_score": totals[rowid],
             "source_ranks": source_ranks.get(rowid, {}),
             "source_contributions": source_contributions.get(rowid, {}),
+            "top_rank_bonus": top_rank_bonuses.get(rowid, 0.0),
         }
         for rowid in ordered
     }

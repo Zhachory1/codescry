@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from repo_index_mcp.embeddings import HashEmbeddingProvider
@@ -63,6 +65,23 @@ def test_rrf_fuse_orders_by_rank_sum_and_tie_key() -> None:
     assert ordered[0] == 2
     assert traces[2]["source_ranks"] == {"fts": 2, "vector": 1}
     assert ordered[1:3] == [1, 3]
+
+
+def test_rrf_fuse_supports_top_rank_bonus_and_extra_sources() -> None:
+    fts = [RankedCandidate(1, 0.9, "b.py", 1)]
+    vector = [RankedCandidate(2, 0.9, "c.py", 1)]
+    path = [RankedCandidate(3, 2.0, "a.py", 1)]
+
+    ordered, traces = rrf_fuse(
+        fts_candidates=fts,
+        vector_candidates=vector,
+        extra_sources=[("path", path)],
+        top_rank_bonus=True,
+    )
+
+    assert ordered == [3, 1, 2]
+    assert traces[3]["source_ranks"] == {"path": 1}
+    assert traces[3]["top_rank_bonus"] == 0.05
 
 
 def test_rrf_ranking_emits_active_trace_with_repo_filter(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -156,3 +175,33 @@ def test_rrf_source_builders_apply_repo_filter(tmp_path, monkeypatch) -> None:  
     assert rows
     assert {row["result"].repo for row in rows} == {"target"}  # type: ignore[union-attr]
     assert rows[0]["score"]["ranking_mode"] == "rrf_v1"  # type: ignore[index]
+
+
+def test_qmd_style_rrf_adds_exact_signal_lists(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    require_sqlite_vec()
+    storage = SQLiteStorage(tmp_path / "index.sqlite")
+    provider = HashEmbeddingProvider()
+    chunks = [
+        replace(
+            make_chunk("def shared_symbol(): return 'target'", "src/shared_symbol.py"),
+            symbol_name="shared_symbol",
+            symbol_confidence="parser",
+        ),
+        make_chunk("def other(): return False", "src/other.py"),
+    ]
+    store_chunks(storage, provider, chunks)
+    storage.backfill_vectors()
+
+    monkeypatch.setenv("CODESCRY_RRF_RANKING", "1")
+    monkeypatch.setenv("CODESCRY_RRF_QMD_STYLE", "1")
+    rows = storage.search_debug(
+        query_embedding=provider.embed("shared_symbol"),
+        embedding_model=provider.model_id,
+        k=5,
+        query_text="shared_symbol",
+        repo="repo",
+    )
+
+    source_ranks = rows[0]["score"]["source_ranks"]  # type: ignore[index]
+    assert {"path", "symbol", "lexical"} <= set(source_ranks)
+    assert rows[0]["score"]["top_rank_bonus"] > 0  # type: ignore[index]
