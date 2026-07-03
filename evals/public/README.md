@@ -6,9 +6,9 @@ These evals measure how CodeScry handles natural-language coding-agent queries o
 
 | Dataset | Repo | Ref | Cases |
 | --- | --- | --- | ---: |
-| `requests.v2.32.3.agent-natural.jsonl` | `https://github.com/psf/requests` | `v2.32.3` | 10 |
-| `flask.3.0.3.agent-natural.jsonl` | `https://github.com/pallets/flask` | `3.0.3` | 10 |
-| `pytest.8.2.2.agent-natural.jsonl` | `https://github.com/pytest-dev/pytest` | `8.2.2` | 10 |
+| `requests.v2.32.3.agent-natural.jsonl` | `https://github.com/psf/requests` | `v2.32.3` | 25 |
+| `flask.3.0.3.agent-natural.jsonl` | `https://github.com/pallets/flask` | `3.0.3` | 25 |
+| `pytest.8.2.2.agent-natural.jsonl` | `https://github.com/pytest-dev/pytest` | `8.2.2` | 25 |
 
 ## Case rules
 
@@ -39,8 +39,8 @@ Run on 2026-07-02 with default local hash embeddings:
 
 | Dataset | Recall@10 | Avg latency |
 | --- | ---: | ---: |
-| requests | 5/10 = 0.500 | 287.9ms |
-| flask | 7/10 = 0.700 | 490.7ms |
-| pytest | 7/10 = 0.700 | 2507.5ms |
+| requests | 13/25 = 0.520 | 278.2ms |
+| flask | 20/25 = 0.800 | 442.7ms |
+| pytest | 12/25 = 0.480 | 2354.8ms |
 
 These results are intentionally lower than the self-repo eval. Natural-language agent queries expose vocabulary mismatch that exact/symbol-heavy evals hide.
