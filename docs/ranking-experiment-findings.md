@@ -200,15 +200,53 @@ Finding:
 
 Broad global expansion overfit Flask and hurt Requests/Pytest. Do not add broad synonyms globally without per-bucket evidence.
 
+## Experiment 6: Ollama `nomic-embed-text`
+
+Merged provider support, then evaluated local Ollama embeddings:
+
+```bash
+CODESCRY_EMBEDDING_PROVIDER=ollama \
+CODESCRY_OLLAMA_MODEL=nomic-embed-text \
+codescry --db <db> eval <golden> <repo> -k 10
+```
+
+Implementation fixes needed before eval was reliable:
+
+- external providers must return provider-sized zero vectors for empty chunks
+- external providers must truncate long chunks with `CODESCRY_EMBEDDING_MAX_CHARS` to avoid Ollama context-limit failures
+
+Results:
+
+| Dataset | Default hash | Ollama `nomic-embed-text` |
+| --- | ---: | ---: |
+| self eval | 0.923 / ~0.687 | 0.962 / 0.850 |
+| requests | 0.520 / 0.388 | 0.560 / 0.467 |
+| flask | 0.800 / 0.523 | 0.760 / 0.533 |
+| pytest | 0.480 / 0.268 | 0.480 / 0.305 |
+
+Average latency increased because local Ollama embeddings are slower at query time and indexing time:
+
+| Dataset | Ollama avg query latency |
+| --- | ---: |
+| self eval | 305ms |
+| requests | 514ms |
+| flask | 835ms |
+| pytest | 4364ms |
+
+Finding:
+
+Ollama real embeddings improve self eval, requests, and pytest MRR, but regress Flask Recall@10 and add substantial latency. This is promising as an opt-in provider, not a default replacement.
+
 ## Overall findings
 
-1. Current hybrid ranking remains strongest overall.
+1. Current hybrid ranking remains strongest default overall.
 2. Plain RRF and qmd-style RRF are useful as experiments, not defaults.
 3. Natural-language public evals reveal much lower recall than self-repo exact/symbol evals.
 4. RRF with weak hash vectors does not reproduce qmd's likely benefit from stronger embeddings and reranking.
 5. Broad deterministic expansion is risky because it can add noisy candidates and dilute exact matches.
 6. Hash embedding tweaks can help one repo and hurt another.
-7. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
+7. Ollama real embeddings are promising but too slow and mixed-quality for default.
+8. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
 
 ## Recommended next bets
 
@@ -218,6 +256,8 @@ The most likely large improvement is better embeddings, not more rank fusion. Op
 
 - local embedding model, opt-in
 - hosted embedding provider, explicit opt-in with data-boundary warning
+
+Ollama `nomic-embed-text` is good enough to keep as supported opt-in, but not good enough to make default.
 
 Requirements before shipping:
 
