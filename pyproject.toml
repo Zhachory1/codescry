@@ -25,6 +25,9 @@ Issues = "https://github.com/Zhachory1/codescry/issues"
 codescry = "repo_index_mcp.cli:main"
 
 [project.optional-dependencies]
+sentence-transformers = [
+  "sentence-transformers>=3.0",
+]
 dev = [
   "build>=1.2",
   "pytest>=8.0",

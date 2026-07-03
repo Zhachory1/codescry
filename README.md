@@ -144,6 +144,7 @@ They preserve the selected DB path and must not fail git commands.
 - `docs/cli-reference.md` — command reference.
 - `docs/output-schema.md` — JSON fields.
 - `docs/evals.md` — eval authoring and gate.
+- `docs/embedding-providers.md` — hash, Ollama, OpenAI, and sentence-transformers embedding providers.
 - `docs/pilot.md` — 5-engineer pilot measurement plan and local reporting commands.
 - `docs/language-support.md` — parser/regex/window support matrix.
 - `docs/recipes.md` — common operations.
@@ -173,6 +174,8 @@ See `docs/pilot.md` for activation, timing, miss capture, and decision gates.
 
 ## Retrieval behavior
 
+- Default embeddings are local deterministic hash vectors.
+- Optional embedding providers include Ollama, OpenAI, and sentence-transformers. See `docs/embedding-providers.md`.
 - Python functions/classes/methods get parser-backed symbol metadata.
 - TS/JS/Go/Java/Rust/C/C++/SQL get Tree-sitter parser-backed symbol metadata.
 - Other common declaration patterns get regex-backed symbol metadata.

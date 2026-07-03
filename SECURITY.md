@@ -8,6 +8,7 @@
 - Chunks and embeddings are stored in a local SQLite database.
 - MCP runs locally over stdio.
 - No telemetry or hosted embedding API is used by default.
+- OpenAI embeddings are available only by explicit opt-in and send indexed source chunks and search queries to OpenAI.
 
 ## Secret handling
 
