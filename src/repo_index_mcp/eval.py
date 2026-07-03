@@ -7,7 +7,7 @@ from pathlib import Path
 
 from repo_index_mcp.engine import RepoIndex
 from repo_index_mcp.models import SearchResult
-from repo_index_mcp.storage import is_docs_path, is_generated_path
+from repo_index_mcp.storage import is_docs_path, is_generated_path, rrf_ranking_enabled
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class EvalReport:
     total: int
     hits: int
     recall_at_k: float
+    mrr: float
     avg_latency_ms: float
     cases: list[CaseResult]
 
@@ -100,6 +101,7 @@ def run_recall_eval(
         total=total,
         hits=hits,
         recall_at_k=hits / total if total else 0.0,
+        mrr=mean_reciprocal_rank([result.rank for result in results]),
         avg_latency_ms=avg_latency_ms,
         cases=results,
     )
@@ -115,6 +117,9 @@ def run_recall_diagnostics(
     case_reports: list[dict[str, object]] = []
     hits = 0
     latencies: list[int] = []
+    ranks: list[int | None] = []
+    rrf_active_count = 0
+    fallback_reason_counts: dict[str, int] = {}
     for case in cases:
         start = time.monotonic()
         debug_rows = engine.query_debug(case.query, k=k, repo=repo)
@@ -130,6 +135,14 @@ def run_recall_diagnostics(
         rank = find_rank(case, results)  # type: ignore[arg-type]
         hit = rank is not None
         hits += int(hit)
+        ranks.append(rank)
+        rrf_state = rrf_case_state(debug_rows)
+        if rrf_state[0]:
+            rrf_active_count += 1
+        elif rrf_state[1] is not None:
+            fallback_reason_counts[rrf_state[1]] = fallback_reason_counts.get(rrf_state[1], 0) + 1
+        elif rrf_ranking_enabled():
+            fallback_reason_counts["no_results"] = fallback_reason_counts.get("no_results", 0) + 1
         case_reports.append(
             {
                 "id": case.id,
@@ -144,15 +157,34 @@ def run_recall_diagnostics(
             }
         )
     total = len(cases)
+    fallback_count = sum(fallback_reason_counts.values())
     return {
         "k": k,
         "total": total,
         "hits": hits,
         "recall_at_k": hits / total if total else 0.0,
+        "mrr": mean_reciprocal_rank(ranks),
         "avg_latency_ms": sum(latencies) / total if total else 0.0,
+        "rrf_active_count": rrf_active_count,
+        "fallback_count": fallback_count,
+        "fallback_reason_counts": fallback_reason_counts,
         "cases": case_reports,
         "misses": [case for case in case_reports if not case["hit"]],
     }
+
+
+def rrf_case_state(rows: list[dict[str, object]]) -> tuple[bool, str | None]:
+    fallback_reason: str | None = None
+    for row in rows:
+        score = row.get("score")
+        if not isinstance(score, dict):
+            continue
+        if score.get("ranking_mode") == "rrf_v1":
+            return True, None
+        reason = score.get("rrf_disabled_reason")
+        if isinstance(reason, str):
+            fallback_reason = reason
+    return False, fallback_reason
 
 
 def debug_result_to_dict(row: dict[str, object]) -> dict[str, object]:
@@ -219,9 +251,16 @@ def find_rank(case: GoldenCase, results: list[SearchResult]) -> int | None:
     return None
 
 
+def mean_reciprocal_rank(ranks: list[int | None]) -> float:
+    if not ranks:
+        return 0.0
+    return sum((1 / rank) if rank is not None else 0.0 for rank in ranks) / len(ranks)
+
+
 def format_report(report: EvalReport) -> str:
     lines = [
         f"Recall@{report.k}: {report.hits}/{report.total} = {report.recall_at_k:.3f}",
+        f"MRR: {report.mrr:.3f}",
         f"Avg latency: {report.avg_latency_ms:.1f}ms",
     ]
     if report.misses:

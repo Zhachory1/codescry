@@ -19,6 +19,7 @@ from repo_index_mcp.eval import (
 from repo_index_mcp.hooks import install_hooks
 from repo_index_mcp.repo import discover_repos
 from repo_index_mcp.secrets import looks_like_secret
+from repo_index_mcp.storage import rrf_ranking_enabled
 from repo_index_mcp.usage import (
     build_report,
     end_task,
@@ -169,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         if index_result.error_count:
             print(json.dumps(asdict(index_result), indent=2))
             return 1
+        if rrf_ranking_enabled():
+            engine.storage.backfill_vectors()
         cases = load_golden_cases(args.golden_file)
         if args.debug:
             diagnostics = run_recall_diagnostics(
@@ -178,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 repo=index_result.repo_id,
             )
             print(json.dumps(diagnostics, indent=2))
+            if rrf_ranking_enabled() and diagnostics.get("rrf_active_count", 0) == 0:
+                return 1
             if args.fail_under is not None and diagnostics["recall_at_k"] < args.fail_under:
                 return 1
             return 0
