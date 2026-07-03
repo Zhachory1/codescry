@@ -78,6 +78,8 @@ class OllamaEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
+        if not text.strip():
+            return [0.0] * self.dimensions
         payload = json.dumps({"model": self.model, "prompt": text}).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url}/api/embeddings",
@@ -132,6 +134,8 @@ class OpenAIEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
+        if not text.strip():
+            return [0.0] * self.dimensions
         payload = json.dumps({"model": self.model, "input": text}).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -187,6 +191,8 @@ class SentenceTransformerEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
+        if not text.strip():
+            return [0.0] * self.dimensions
         embedding = self._model.encode(text, normalize_embeddings=True)
         if hasattr(embedding, "tolist"):
             values = embedding.tolist()
