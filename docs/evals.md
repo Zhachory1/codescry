@@ -35,6 +35,8 @@ scripts/eval-public-repos.sh
 
 The script clones repos under `~/.cache/codescry/eval-repos` and writes eval DBs under `~/.cache/codescry/eval-dbs`. Override with `CODESCRY_PUBLIC_EVAL_ROOT`, `CODESCRY_PUBLIC_EVAL_DB_DIR`, or `CODESCRY_PUBLIC_EVAL_K`.
 
+See `docs/ranking-experiment-findings.md` for ranking experiment results and public eval baselines.
+
 Add a scrubbed/synthetic case from a pilot miss. Do not commit proprietary snippets, secrets, customer data, or raw private queries to shared eval files.
 
 

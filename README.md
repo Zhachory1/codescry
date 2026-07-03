@@ -149,6 +149,7 @@ They preserve the selected DB path and must not fail git commands.
 - `docs/recipes.md` — common operations.
 - `docs/upgrade-uninstall.md` — lifecycle commands.
 - `docs/release.md` — PyPI-first and npm-wrapper release flow.
+- `docs/ranking-experiment-findings.md` — retrieval/ranking experiments and eval findings.
 
 ## Evals
 
