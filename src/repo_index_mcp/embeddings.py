@@ -17,6 +17,7 @@ DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 DEFAULT_SENTENCE_TRANSFORMERS_MODEL = "BAAI/bge-small-en-v1.5"
+DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS = 6000
 
 
 class EmbeddingProvider(Protocol):
@@ -61,10 +62,12 @@ class OllamaEmbeddingProvider:
         model: str = DEFAULT_OLLAMA_MODEL,
         base_url: str = DEFAULT_OLLAMA_URL,
         timeout_seconds: float = 60.0,
+        max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.max_chars = max_chars
         self._dimensions: int | None = None
 
     @property
@@ -80,7 +83,9 @@ class OllamaEmbeddingProvider:
     def embed(self, text: str) -> list[float]:
         if not text.strip():
             return [0.0] * self.dimensions
-        payload = json.dumps({"model": self.model, "prompt": text}).encode("utf-8")
+        payload = json.dumps(
+            {"model": self.model, "prompt": truncate_text(text, self.max_chars)}
+        ).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url}/api/embeddings",
             data=payload,
@@ -113,6 +118,7 @@ class OpenAIEmbeddingProvider:
         base_url: str = DEFAULT_OPENAI_BASE_URL,
         organization: str | None = None,
         timeout_seconds: float = 60.0,
+        max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
     ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the openai embedding provider")
@@ -121,6 +127,7 @@ class OpenAIEmbeddingProvider:
         self.base_url = base_url.rstrip("/")
         self.organization = organization
         self.timeout_seconds = timeout_seconds
+        self.max_chars = max_chars
         self._dimensions: int | None = None
 
     @property
@@ -136,7 +143,9 @@ class OpenAIEmbeddingProvider:
     def embed(self, text: str) -> list[float]:
         if not text.strip():
             return [0.0] * self.dimensions
-        payload = json.dumps({"model": self.model, "input": text}).encode("utf-8")
+        payload = json.dumps(
+            {"model": self.model, "input": truncate_text(text, self.max_chars)}
+        ).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
@@ -169,7 +178,11 @@ class OpenAIEmbeddingProvider:
 
 
 class SentenceTransformerEmbeddingProvider:
-    def __init__(self, model: str = DEFAULT_SENTENCE_TRANSFORMERS_MODEL) -> None:
+    def __init__(
+        self,
+        model: str = DEFAULT_SENTENCE_TRANSFORMERS_MODEL,
+        max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
+    ) -> None:
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -178,6 +191,7 @@ class SentenceTransformerEmbeddingProvider:
                 "pip install 'codescry[sentence-transformers]'"
             ) from exc
         self.model_name = model
+        self.max_chars = max_chars
         self._model = SentenceTransformer(model)
         dimensions = self._model.get_sentence_embedding_dimension()
         self._dimensions = int(dimensions) if dimensions is not None else len(self.embed("probe"))
@@ -193,7 +207,10 @@ class SentenceTransformerEmbeddingProvider:
     def embed(self, text: str) -> list[float]:
         if not text.strip():
             return [0.0] * self.dimensions
-        embedding = self._model.encode(text, normalize_embeddings=True)
+        embedding = self._model.encode(
+            truncate_text(text, self.max_chars),
+            normalize_embeddings=True,
+        )
         if hasattr(embedding, "tolist"):
             values = embedding.tolist()
         else:
@@ -213,6 +230,7 @@ def embedding_provider_from_env(
         return OllamaEmbeddingProvider(
             model=env.get("CODESCRY_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
             base_url=env.get("CODESCRY_OLLAMA_URL", DEFAULT_OLLAMA_URL),
+            max_chars=external_embedding_max_chars(env),
         )
     if provider == "openai":
         return OpenAIEmbeddingProvider(
@@ -220,15 +238,27 @@ def embedding_provider_from_env(
             model=env.get("CODESCRY_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
             base_url=env.get("CODESCRY_OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
             organization=env.get("OPENAI_ORG_ID"),
+            max_chars=external_embedding_max_chars(env),
         )
     if provider in {"sentence-transformers", "sentence_transformers", "st"}:
         return SentenceTransformerEmbeddingProvider(
-            model=env.get("CODESCRY_ST_MODEL", DEFAULT_SENTENCE_TRANSFORMERS_MODEL)
+            model=env.get("CODESCRY_ST_MODEL", DEFAULT_SENTENCE_TRANSFORMERS_MODEL),
+            max_chars=external_embedding_max_chars(env),
         )
     raise ValueError(
         "unknown CODESCRY_EMBEDDING_PROVIDER "
         f"{provider!r}; expected hash, ollama, openai, or sentence-transformers"
     )
+
+
+def external_embedding_max_chars(env: Mapping[str, str]) -> int:
+    return int(env.get("CODESCRY_EMBEDDING_MAX_CHARS", str(DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS)))
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars]
 
 
 def normalize_vector(vector: list[float]) -> list[float]:

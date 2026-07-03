@@ -116,6 +116,16 @@ sentence-transformers:BAAI/bge-small-en-v1.5
 
 The model runs locally after download. No source code is uploaded by CodeScry.
 
+## Long chunks
+
+External providers receive at most `CODESCRY_EMBEDDING_MAX_CHARS` characters per chunk. Default: `6000`.
+
+```bash
+CODESCRY_EMBEDDING_MAX_CHARS=6000
+```
+
+This avoids context-window failures for local and hosted embedding models. Hash embeddings do not use this limit.
+
 ## Evaluation
 
 Compare providers against both self-repo and public agent-natural evals:

@@ -7,6 +7,7 @@ from repo_index_mcp.embeddings import (
     cosine_similarity,
     embedding_provider_from_env,
     tokenize_code,
+    truncate_text,
 )
 
 
@@ -80,6 +81,11 @@ def test_embedding_provider_from_env_rejects_unknown_provider() -> None:
 def test_openai_provider_requires_api_key() -> None:
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         OpenAIEmbeddingProvider(api_key="")
+
+
+def test_truncate_text_respects_non_positive_limit() -> None:
+    assert truncate_text("abcdef", 3) == "abc"
+    assert truncate_text("abcdef", 0) == "abcdef"
 
 
 def test_http_providers_return_sized_zero_vector_for_empty_text() -> None:
