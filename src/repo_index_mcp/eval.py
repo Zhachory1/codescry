@@ -18,6 +18,9 @@ class GoldenCase:
     expected_text: str | None = None
     expected_symbol: str | None = None
     notes: str | None = None
+    repo_url: str | None = None
+    repo_ref: str | None = None
+    query_type: str | None = None
 
 
 @dataclass(frozen=True)
