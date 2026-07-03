@@ -2009,6 +2009,8 @@ def path_rank_multiplier(query_text: str, path: str) -> float:
         return 0.55
     if is_docs_path(normalized):
         return 0.70
+    if is_test_path(normalized) and not wants_test_query(query_text):
+        return 0.65
     return 1.0
 
 
@@ -2035,6 +2037,23 @@ def wants_docs_query(query_text: str) -> bool:
 def is_docs_path(path: str) -> bool:
     name = path.rsplit("/", maxsplit=1)[-1]
     return path.startswith("docs/") or name in {"readme.md", "security.md"}
+
+
+def wants_test_query(query_text: str) -> bool:
+    query_tokens = set(tokenize_code(query_text))
+    return bool(query_tokens & {"test", "tests", "testing", "pytest", "spec", "assert"})
+
+
+def is_test_path(path: str) -> bool:
+    name = path.rsplit("/", maxsplit=1)[-1]
+    return (
+        path.startswith("tests/")
+        or path.startswith("testing/")
+        or "/tests/" in path
+        or "/testing/" in path
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
 
 
 def is_generated_path(path: str) -> bool:

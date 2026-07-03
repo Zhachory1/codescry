@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from repo_index_mcp.chunking import LineChunker
-from repo_index_mcp.embeddings import EmbeddingProvider, HashEmbeddingProvider
+from repo_index_mcp.embeddings import EmbeddingProvider, embedding_provider_from_env
 from repo_index_mcp.models import IndexResult, SearchResult
 from repo_index_mcp.repo import (
     changed_paths_between,
@@ -36,7 +36,7 @@ class RepoIndex:
         chunker: LineChunker | None = None,
     ) -> None:
         self.storage = SQLiteStorage(db_path)
-        self.embedding_provider = embedding_provider or HashEmbeddingProvider()
+        self.embedding_provider = embedding_provider or embedding_provider_from_env()
         self.chunker = chunker or LineChunker()
 
     def index_repo(self, repo_path: str | Path) -> IndexResult:
