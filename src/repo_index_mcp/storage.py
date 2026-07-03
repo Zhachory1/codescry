@@ -23,6 +23,7 @@ RRF_FETCH_MULTIPLIER = 4
 RRF_MIN_FETCH = 50
 RRF_MAX_FETCH = 500
 RRF_FILTERED_VECTOR_SCAN_LIMIT = 5000
+RRF_FILTERED_VECTOR_OVERFETCH_LIMIT = 4096
 RRF_EXACT_SCAN_LIMIT = 5000
 RRF_TOP_RANK_BONUS = 0.05
 RRF_NEAR_TOP_RANK_BONUS = 0.02
@@ -1531,7 +1532,16 @@ def ranked_vector_candidates_by_scan(
         ).fetchone()[0]
     )
     if count > RRF_FILTERED_VECTOR_SCAN_LIMIT:
-        return []
+        return ranked_vector_candidates_by_overfetch(
+            conn,
+            query_embedding=query_embedding,
+            embedding_model=embedding_model,
+            repo=repo,
+            path_prefix=path_prefix,
+            language=language,
+            limit=limit,
+            filtered_count=count,
+        )
     sql = f"""
         SELECT c.rowid, c.embedding, c.path, c.start_line
         FROM chunks c
@@ -1545,6 +1555,72 @@ def ranked_vector_candidates_by_scan(
     return [
         RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
         for rowid, score, path, start_line in candidates[:limit]
+    ]
+
+
+def ranked_vector_candidates_by_overfetch(
+    conn: sqlite3.Connection,
+    *,
+    query_embedding: list[float],
+    embedding_model: str,
+    repo: str | None,
+    path_prefix: str | None,
+    language: str | None,
+    limit: int,
+    filtered_count: int,
+) -> list[RankedCandidate]:
+    sqlite_vec = load_sqlite_vec(conn)
+    if sqlite_vec is None or not ensure_vector_table(conn, len(query_embedding)):
+        return []
+    overfetch = min(
+        RRF_FILTERED_VECTOR_OVERFETCH_LIMIT,
+        max(limit * 10, filtered_count),
+    )
+    try:
+        vector_rows = conn.execute(
+            """
+            SELECT rowid, distance
+            FROM chunk_vectors
+            WHERE embedding MATCH ? AND k = ?
+            ORDER BY distance ASC
+            """,
+            (sqlite_vec.serialize_float32(query_embedding), overfetch),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    if not vector_rows:
+        return []
+
+    distances = {int(row[0]): float(row[1]) for row in vector_rows}
+    rowids = list(distances)
+    placeholders = ",".join("?" for _ in rowids)
+    where = [f"c.rowid IN ({placeholders})", "c.embedding_model = ?"]
+    params: list[object] = [*rowids, embedding_model]
+    if repo:
+        where.append("(c.repo_id = ? OR c.repo_path = ?)")
+        params.extend([repo, repo])
+    if path_prefix:
+        where.append("c.path LIKE ?")
+        params.append(f"{path_prefix}%")
+    if language:
+        where.append("c.language = ?")
+        params.append(language)
+    sql = f"""
+        SELECT c.rowid, c.path, c.start_line
+        FROM chunks c
+        WHERE {' AND '.join(where)}
+    """
+    candidates = []
+    for row in conn.execute(sql, params):
+        rowid = int(row[0])
+        distance = distances[rowid]
+        candidates.append(
+            (rowid, 1.0 / (1.0 + max(distance, 0.0)), str(row[1]), int(row[2]), distance)
+        )
+    candidates.sort(key=lambda item: (item[4], item[2], item[3], item[0]))
+    return [
+        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
+        for rowid, score, path, start_line, _distance in candidates[:limit]
     ]
 
 
