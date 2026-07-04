@@ -1505,20 +1505,24 @@ def vector_scores(
     language: str | None = None,
     limit: int = DEFAULT_VECTOR_CANDIDATE_LIMIT,
 ) -> dict[int, float]:
+    if repo or path_prefix or language:
+        return {
+            candidate.rowid: candidate.backend_score
+            for candidate in ranked_vector_candidates(
+                conn,
+                query_embedding=query_embedding,
+                embedding_model=embedding_model,
+                repo=repo,
+                path_prefix=path_prefix,
+                language=language,
+                limit=limit,
+            )
+        }
     sqlite_vec = load_sqlite_vec(conn)
     if sqlite_vec is None or not ensure_vector_table(conn, len(query_embedding)):
         return {}
     where = ["v.embedding MATCH ?", "k = ?", "c.embedding_model = ?"]
     params: list[object] = [sqlite_vec.serialize_float32(query_embedding), limit, embedding_model]
-    if repo:
-        where.append("(c.repo_id = ? OR c.repo_path = ?)")
-        params.extend([repo, repo])
-    if path_prefix:
-        where.append("c.path LIKE ?")
-        params.append(f"{path_prefix}%")
-    if language:
-        where.append("c.language = ?")
-        params.append(language)
     sql = f"""
         SELECT v.rowid, v.distance
         FROM chunk_vectors v
