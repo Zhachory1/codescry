@@ -244,7 +244,11 @@ class RepoIndex:
         language: str | None = None,
         k: int | None = 10,
     ) -> list[dict[str, object]]:
+        total_start = time.perf_counter()
+        embed_start = time.perf_counter()
         query_embedding = self.embedding_provider.embed(query)
+        embed_ms = int((time.perf_counter() - embed_start) * 1000)
+        storage_start = time.perf_counter()
         debug_rows = self.storage.search_debug(
             query_embedding=query_embedding,
             embedding_model=self.embedding_provider.model_id,
@@ -254,8 +258,11 @@ class RepoIndex:
             path_prefix=path_prefix,
             language=language,
         )
+        storage_ms = int((time.perf_counter() - storage_start) * 1000)
         repo_ids = {row["result"].repo for row in debug_rows}  # type: ignore[union-attr]
+        repo_status_start = time.perf_counter()
         repo_state = {str(item["repo_id"]): item for item in self._repo_status(repo_ids)}
+        repo_status_ms = int((time.perf_counter() - repo_status_start) * 1000)
         output: list[dict[str, object]] = []
         for row in debug_rows:
             result = row["result"]
@@ -266,7 +273,16 @@ class RepoIndex:
                     repo_state.get(result.repo, {}).get("has_dirty_tracked_files", False)
                 ),
             )
-            output.append({"result": enriched, "score": row["score"]})
+            telemetry = dict(row.get("telemetry", {}))
+            telemetry.update(
+                {
+                    "embed_query_ms": embed_ms,
+                    "storage_ms": storage_ms,
+                    "repo_status_ms": repo_status_ms,
+                    "engine_total_ms": int((time.perf_counter() - total_start) * 1000),
+                }
+            )
+            output.append({"result": enriched, "score": row["score"], "telemetry": telemetry})
         return output
 
     def expected_path_debug(
