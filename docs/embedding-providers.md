@@ -43,7 +43,17 @@ This is local, deterministic, cheap, and dependency-free. It is not a trained se
 
 ## Ollama provider
 
-Use a local Ollama embedding model:
+Use a local Ollama embedding model. Current recommended quality-first local model:
+
+```bash
+ollama pull mxbai-embed-large
+CODESCRY_EMBEDDING_PROVIDER=ollama \
+CODESCRY_OLLAMA_MODEL=mxbai-embed-large \
+CODESCRY_EMBEDDING_MAX_CHARS=500 \
+codescry index-root ~/code
+```
+
+Smaller/faster model:
 
 ```bash
 ollama pull nomic-embed-text
@@ -58,13 +68,16 @@ Optional base URL:
 CODESCRY_OLLAMA_URL=http://localhost:11434
 ```
 
-Model id format:
+Model id formats:
 
 ```text
+ollama:mxbai-embed-large@http://localhost:11434
 ollama:nomic-embed-text@http://localhost:11434
 ```
 
 CodeScry calls Ollama's local `/api/embeddings` endpoint. Source code and queries stay on the machine if Ollama is local.
+
+Public evals found `mxbai-embed-large` was the strongest local provider tested so far, but it needs `CODESCRY_EMBEDDING_MAX_CHARS=500` to avoid context-limit errors.
 
 ## OpenAI provider
 
@@ -139,7 +152,8 @@ Example:
 
 ```bash
 CODESCRY_EMBEDDING_PROVIDER=ollama \
-CODESCRY_OLLAMA_MODEL=nomic-embed-text \
+CODESCRY_OLLAMA_MODEL=mxbai-embed-large \
+CODESCRY_EMBEDDING_MAX_CHARS=500 \
 scripts/eval-public-repos.sh
 ```
 
