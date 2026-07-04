@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -78,6 +79,69 @@ class SQLiteStorage:
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
+
+    def cached_query_embedding(
+        self,
+        *,
+        embedding_model: str,
+        provider_fingerprint: str,
+        query_text: str,
+        expected_dimensions: int,
+    ) -> list[float] | None:
+        with self._connect() as conn:
+            query_hash = query_embedding_hash(conn, query_text)
+            row = conn.execute(
+                """
+                SELECT embedding
+                FROM query_embedding_cache
+                WHERE embedding_model = ? AND provider_fingerprint = ? AND query_hash = ?
+                """,
+                (embedding_model, provider_fingerprint, query_hash),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                embedding = [float(value) for value in json.loads(row[0])]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                delete_cached_query_embedding(
+                    conn,
+                    embedding_model=embedding_model,
+                    provider_fingerprint=provider_fingerprint,
+                    query_hash=query_hash,
+                )
+                return None
+            if len(embedding) != expected_dimensions:
+                delete_cached_query_embedding(
+                    conn,
+                    embedding_model=embedding_model,
+                    provider_fingerprint=provider_fingerprint,
+                    query_hash=query_hash,
+                )
+                return None
+            return embedding
+
+    def cache_query_embedding(
+        self,
+        *,
+        embedding_model: str,
+        provider_fingerprint: str,
+        query_text: str,
+        embedding: list[float],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO query_embedding_cache(
+                    embedding_model, provider_fingerprint, query_hash, embedding
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    embedding_model,
+                    provider_fingerprint,
+                    query_embedding_hash(conn, query_text),
+                    json.dumps(embedding),
+                ),
+            )
 
     def cleanup_repo_path_aliases(self, *, repo_id: str, repo_path: str) -> int:
         with self._connect() as conn:
@@ -980,6 +1044,14 @@ class SQLiteStorage:
                     value TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS query_embedding_cache (
+                    embedding_model TEXT NOT NULL,
+                    provider_fingerprint TEXT NOT NULL,
+                    query_hash TEXT NOT NULL,
+                    embedding TEXT NOT NULL,
+                    PRIMARY KEY(embedding_model, provider_fingerprint, query_hash)
+                );
+
                 """
             )
             ensure_column(
@@ -1079,6 +1151,30 @@ def set_meta_value(conn: sqlite3.Connection, key: str, value: str) -> None:
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
         """,
         (key, value),
+    )
+
+
+def query_embedding_hash(conn: sqlite3.Connection, query_text: str) -> str:
+    salt = meta_value(conn, "query_embedding_cache_salt")
+    if salt is None:
+        salt = os.urandom(32).hex()
+        set_meta_value(conn, "query_embedding_cache_salt", salt)
+    return hmac.new(bytes.fromhex(salt), query_text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def delete_cached_query_embedding(
+    conn: sqlite3.Connection,
+    *,
+    embedding_model: str,
+    provider_fingerprint: str,
+    query_hash: str,
+) -> None:
+    conn.execute(
+        """
+        DELETE FROM query_embedding_cache
+        WHERE embedding_model = ? AND provider_fingerprint = ? AND query_hash = ?
+        """,
+        (embedding_model, provider_fingerprint, query_hash),
     )
 
 
