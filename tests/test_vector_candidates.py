@@ -140,6 +140,57 @@ def test_default_candidate_union_preserves_vector_hit_with_fts_distractors(
     assert union_results[0].path == full_scan_results[0].path == "src/rate_limit.py"
 
 
+def test_candidate_union_preflight_allows_repo_filter(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    storage = SQLiteStorage(tmp_path / "index.sqlite")
+    provider = HashEmbeddingProvider()
+    target = make_chunk("def rate_limit(): pass", path="src/rate_limit.py")
+    other = Chunk(
+        repo_id="other",
+        repo_path="/other",
+        path="src/other.py",
+        language="python",
+        symbol_name="other",
+        symbol_kind="function",
+        symbol_line=1,
+        symbol_confidence="parser",
+        start_line=1,
+        end_line=1,
+        content="def other(): pass",
+    )
+    for chunk in [target, other]:
+        storage.replace_file_chunks(
+            repo_id=chunk.repo_id,
+            path=chunk.path,
+            content_hash=chunk.path,
+            chunks=[chunk],
+            embeddings=[provider.embed(chunk.content)],
+            commit_sha="commit",
+            embedding_model=provider.model_id,
+            chunker_version="chunker",
+        )
+    storage.backfill_vectors()
+    monkeypatch.setenv("CODESCRY_CANDIDATE_THRESHOLD", "1")
+
+    with storage._connect() as conn:  # noqa: SLF001
+        assert should_try_candidate_union(
+            conn,
+            query_text="rate_limit",
+            embedding_model=provider.model_id,
+            repo="repo",
+            path_prefix=None,
+            language=None,
+            k=5,
+        ) is True
+        scores = vector_scores(
+            conn,
+            query_embedding=provider.embed("rate_limit"),
+            embedding_model=provider.model_id,
+            repo="repo",
+        )
+
+    assert scores
+
+
 def test_candidate_union_requires_vector_candidates(tmp_path):  # type: ignore[no-untyped-def]
     storage = SQLiteStorage(tmp_path / "index.sqlite")
     with storage._connect() as conn:  # noqa: SLF001

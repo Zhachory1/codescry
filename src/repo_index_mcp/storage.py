@@ -23,7 +23,6 @@ RRF_K = 60
 RRF_FETCH_MULTIPLIER = 4
 RRF_MIN_FETCH = 50
 RRF_MAX_FETCH = 500
-RRF_FILTERED_VECTOR_SCAN_LIMIT = 5000
 RRF_FILTERED_VECTOR_OVERFETCH_LIMIT = 4096
 RRF_EXACT_SCAN_LIMIT = 5000
 RRF_TOP_RANK_BONUS = 0.05
@@ -385,19 +384,22 @@ class SQLiteStorage:
             )
             fts_limit = (
                 DEFAULT_UNION_FTS_CANDIDATE_LIMIT
-                if union_preflight
+                if union_preflight and not (repo or path_prefix or language)
                 else DEFAULT_FTS_CANDIDATE_LIMIT
             )
             fts_start = time.perf_counter()
-            bm25_scores = fts_scores(
-                conn,
-                query_text=query_text,
-                embedding_model=embedding_model,
-                repo=repo,
-                path_prefix=path_prefix,
-                language=language,
-                limit=fts_limit,
-            )
+            if union_preflight and (repo or path_prefix or language):
+                bm25_scores = {}
+            else:
+                bm25_scores = fts_scores(
+                    conn,
+                    query_text=query_text,
+                    embedding_model=embedding_model,
+                    repo=repo,
+                    path_prefix=path_prefix,
+                    language=language,
+                    limit=fts_limit,
+                )
             telemetry["fts_ms"] = elapsed_ms(fts_start)
             telemetry["fts_candidates"] = len(bm25_scores)
             vector_start = time.perf_counter()
@@ -1549,7 +1551,7 @@ def ranked_vector_candidates(
     limit: int = DEFAULT_VECTOR_CANDIDATE_LIMIT,
 ) -> list[RankedCandidate]:
     if repo or path_prefix or language:
-        return ranked_vector_candidates_by_scan(
+        return ranked_vector_candidates_by_overfetch(
             conn,
             query_embedding=query_embedding,
             embedding_model=embedding_model,
@@ -1584,60 +1586,6 @@ def ranked_vector_candidates(
     ]
 
 
-def ranked_vector_candidates_by_scan(
-    conn: sqlite3.Connection,
-    *,
-    query_embedding: list[float],
-    embedding_model: str,
-    repo: str | None,
-    path_prefix: str | None,
-    language: str | None,
-    limit: int,
-) -> list[RankedCandidate]:
-    where = ["c.embedding_model = ?"]
-    params: list[object] = [embedding_model]
-    if repo:
-        where.append("(c.repo_id = ? OR c.repo_path = ?)")
-        params.extend([repo, repo])
-    if path_prefix:
-        where.append("c.path LIKE ?")
-        params.append(f"{path_prefix}%")
-    if language:
-        where.append("c.language = ?")
-        params.append(language)
-    count = int(
-        conn.execute(
-            f"SELECT COUNT(*) FROM chunks c WHERE {' AND '.join(where)}",
-            params,
-        ).fetchone()[0]
-    )
-    if count > RRF_FILTERED_VECTOR_SCAN_LIMIT:
-        return ranked_vector_candidates_by_overfetch(
-            conn,
-            query_embedding=query_embedding,
-            embedding_model=embedding_model,
-            repo=repo,
-            path_prefix=path_prefix,
-            language=language,
-            limit=limit,
-            filtered_count=count,
-        )
-    sql = f"""
-        SELECT c.rowid, c.embedding, c.path, c.start_line
-        FROM chunks c
-        WHERE {' AND '.join(where)}
-    """
-    candidates = []
-    for row in conn.execute(sql, params):
-        score = cosine_similarity(query_embedding, json.loads(row[1]))
-        candidates.append((int(row[0]), score, str(row[2]), int(row[3])))
-    candidates.sort(key=lambda item: (-item[1], item[2], item[3], item[0]))
-    return [
-        RankedCandidate(rowid=rowid, backend_score=score, path=path, start_line=start_line)
-        for rowid, score, path, start_line in candidates[:limit]
-    ]
-
-
 def ranked_vector_candidates_by_overfetch(
     conn: sqlite3.Connection,
     *,
@@ -1647,15 +1595,11 @@ def ranked_vector_candidates_by_overfetch(
     path_prefix: str | None,
     language: str | None,
     limit: int,
-    filtered_count: int,
 ) -> list[RankedCandidate]:
     sqlite_vec = load_sqlite_vec(conn)
     if sqlite_vec is None or not ensure_vector_table(conn, len(query_embedding)):
         return []
-    overfetch = min(
-        RRF_FILTERED_VECTOR_OVERFETCH_LIMIT,
-        max(limit * 10, filtered_count),
-    )
+    overfetch = min(RRF_FILTERED_VECTOR_OVERFETCH_LIMIT, max(limit, DEFAULT_VECTOR_CANDIDATE_LIMIT))
     try:
         vector_rows = conn.execute(
             """
@@ -2161,8 +2105,6 @@ def should_try_candidate_union(
         return False
     if k is None or wants_docs_query(query_text):
         return False
-    if repo or path_prefix or language:
-        return False
     if estimated_indexed_chunks(conn) < candidate_threshold():
         return False
     return vector_coverage_complete(conn, embedding_model=embedding_model)
@@ -2176,6 +2118,8 @@ def should_use_candidate_union(
 ) -> bool:
     if k is None or not vector_scores:
         return False
+    if not bm25_scores:
+        return len(vector_scores) >= k
     return len(set(vector_scores) | set(bm25_scores)) >= max(50, k * 10)
 
 
