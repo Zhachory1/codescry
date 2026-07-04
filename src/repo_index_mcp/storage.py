@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -340,8 +341,22 @@ class SQLiteStorage:
             where.append("c.language = ?")
             params.append(language)
 
+        total_start = time.perf_counter()
         rows: list[dict[str, object]] = []
         rrf_disabled_reason: str | None = None
+        telemetry: dict[str, object] = {
+            "ranking_mode": "current",
+            "candidate_path": "full_scan",
+            "fts_ms": 0,
+            "vector_ms": 0,
+            "row_score_ms": 0,
+            "diversify_ms": 0,
+            "fts_candidates": 0,
+            "vector_candidates": 0,
+            "candidate_union_size": 0,
+            "rows_scored": 0,
+            "rows_returned": 0,
+        }
         with self._connect() as conn:
             if rrf_ranking_enabled() and k is not None:
                 rrf_rows, rrf_disabled_reason = self._search_debug_rrf(
@@ -373,6 +388,7 @@ class SQLiteStorage:
                 if union_preflight
                 else DEFAULT_FTS_CANDIDATE_LIMIT
             )
+            fts_start = time.perf_counter()
             bm25_scores = fts_scores(
                 conn,
                 query_text=query_text,
@@ -382,6 +398,9 @@ class SQLiteStorage:
                 language=language,
                 limit=fts_limit,
             )
+            telemetry["fts_ms"] = elapsed_ms(fts_start)
+            telemetry["fts_candidates"] = len(bm25_scores)
+            vector_start = time.perf_counter()
             vector_candidate_scores = (
                 vector_scores(
                     conn,
@@ -394,6 +413,8 @@ class SQLiteStorage:
                 if union_preflight
                 else {}
             )
+            telemetry["vector_ms"] = elapsed_ms(vector_start)
+            telemetry["vector_candidates"] = len(vector_candidate_scores)
             from_clause = "chunks c"
             if should_use_candidate_union(
                 vector_scores=vector_candidate_scores,
@@ -401,6 +422,8 @@ class SQLiteStorage:
                 k=k,
             ):
                 candidate_rowids = set(vector_candidate_scores) | set(bm25_scores)
+                telemetry["candidate_path"] = "candidate_union"
+                telemetry["candidate_union_size"] = len(candidate_rowids)
                 conn.execute(
                     "CREATE TEMP TABLE IF NOT EXISTS candidate_rowids(rowid INTEGER PRIMARY KEY)"
                 )
@@ -428,6 +451,7 @@ class SQLiteStorage:
                 FROM {from_clause}
                 WHERE {' AND '.join(where)}
             """
+            score_start = time.perf_counter()
             for row in conn.execute(sql, params):
                 embedding = json.loads(row[7])
                 vector_score = cosine_similarity(query_embedding, embedding)
@@ -460,15 +484,27 @@ class SQLiteStorage:
                     symbol_confidence=row[12],
                 )
                 rows.append({"result": result, "score": parts})
+            telemetry["row_score_ms"] = elapsed_ms(score_start)
+            telemetry["rows_scored"] = len(rows)
 
         rows.sort(key=lambda item: search_sort_key(item["result"]), reverse=True)
         if k is None:
-            return rows
+            telemetry["rows_returned"] = len(rows)
+            telemetry["total_ms"] = elapsed_ms(total_start)
+            return attach_telemetry(rows, telemetry)
         if wants_docs_query(query_text):
-            return rows[:k]
+            output = rows[:k]
+            telemetry["rows_returned"] = len(output)
+            telemetry["total_ms"] = elapsed_ms(total_start)
+            return attach_telemetry(output, telemetry)
+        diversify_start = time.perf_counter()
         selected = diversify_results([item["result"] for item in rows], k)
+        telemetry["diversify_ms"] = elapsed_ms(diversify_start)
         debug_by_result_id = {id(item["result"]): item for item in rows}
-        return [debug_by_result_id[id(result)] for result in selected]
+        output = [debug_by_result_id[id(result)] for result in selected]
+        telemetry["rows_returned"] = len(output)
+        telemetry["total_ms"] = elapsed_ms(total_start)
+        return attach_telemetry(output, telemetry)
 
     def _search_debug_rrf(
         self,
@@ -482,6 +518,8 @@ class SQLiteStorage:
         path_prefix: str | None,
         language: str | None,
     ) -> tuple[list[dict[str, object]], str | None]:
+        total_start = time.perf_counter()
+        fts_start = time.perf_counter()
         fts_candidates = ranked_fts_candidates(
             conn,
             query_text=query_text,
@@ -491,12 +529,14 @@ class SQLiteStorage:
             language=language,
             limit=DEFAULT_UNION_FTS_CANDIDATE_LIMIT,
         )
+        fts_ms = elapsed_ms(fts_start)
         if not fts_candidates:
             return [], "no_fts_candidates"
         if not vector_table_exists(conn):
             return [], "vector_table_missing"
         if not vector_coverage_complete(conn, embedding_model=embedding_model):
             return [], "vector_coverage_incomplete"
+        vector_start = time.perf_counter()
         vector_candidates = ranked_vector_candidates(
             conn,
             query_embedding=query_embedding,
@@ -506,6 +546,7 @@ class SQLiteStorage:
             language=language,
             limit=DEFAULT_VECTOR_CANDIDATE_LIMIT,
         )
+        vector_ms = elapsed_ms(vector_start)
         if not vector_candidates:
             return [], "no_vector_candidates"
 
@@ -547,12 +588,14 @@ class SQLiteStorage:
                 ),
             ]
 
+        fuse_start = time.perf_counter()
         ordered_rowids, traces = rrf_fuse(
             fts_candidates=fts_candidates,
             vector_candidates=vector_candidates,
             extra_sources=extra_sources,
             top_rank_bonus=rrf_top_rank_bonus_enabled(),
         )
+        fuse_ms = elapsed_ms(fuse_start)
         fetch_limit = min(RRF_MAX_FETCH, max(RRF_MIN_FETCH, k * RRF_FETCH_MULTIPLIER))
         fetch_rowids = ordered_rowids[:fetch_limit]
         if not fetch_rowids:
@@ -579,6 +622,7 @@ class SQLiteStorage:
             ],
         )
         rows: list[dict[str, object]] = []
+        fetch_start = time.perf_counter()
         sql = """
             SELECT
                 c.rowid,
@@ -625,11 +669,34 @@ class SQLiteStorage:
                     },
                 }
             )
+        row_fetch_ms = elapsed_ms(fetch_start)
+        telemetry: dict[str, object] = {
+            "ranking_mode": "rrf_v1",
+            "candidate_path": "rrf",
+            "fts_ms": fts_ms,
+            "vector_ms": vector_ms,
+            "fuse_ms": fuse_ms,
+            "row_fetch_ms": row_fetch_ms,
+            "diversify_ms": 0,
+            "fts_candidates": len(fts_candidates),
+            "vector_candidates": len(vector_candidates),
+            "candidate_union_size": len(ordered_rowids),
+            "rows_scored": len(rows),
+            "rows_returned": 0,
+        }
         if wants_docs_query(query_text):
-            return rows[:k], None
+            output = rows[:k]
+            telemetry["rows_returned"] = len(output)
+            telemetry["total_ms"] = elapsed_ms(total_start)
+            return attach_telemetry(output, telemetry), None
+        diversify_start = time.perf_counter()
         selected = diversify_results([item["result"] for item in rows], k)
+        telemetry["diversify_ms"] = elapsed_ms(diversify_start)
         debug_by_result_id = {id(item["result"]): item for item in rows}
-        return [debug_by_result_id[id(result)] for result in selected], None
+        output = [debug_by_result_id[id(result)] for result in selected]
+        telemetry["rows_returned"] = len(output)
+        telemetry["total_ms"] = elapsed_ms(total_start)
+        return attach_telemetry(output, telemetry), None
 
     def expected_path_debug(
         self,
@@ -1249,6 +1316,19 @@ def ensure_vector_table(
         """
     )
     return True
+
+
+def elapsed_ms(start: float) -> int:
+    return int((time.perf_counter() - start) * 1000)
+
+
+def attach_telemetry(
+    rows: list[dict[str, object]],
+    telemetry: dict[str, object],
+) -> list[dict[str, object]]:
+    for row in rows:
+        row["telemetry"] = telemetry
+    return rows
 
 
 def vector_table_exists(conn: sqlite3.Connection) -> bool:

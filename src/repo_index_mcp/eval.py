@@ -123,6 +123,7 @@ def run_recall_diagnostics(
     ranks: list[int | None] = []
     rrf_active_count = 0
     fallback_reason_counts: dict[str, int] = {}
+    telemetry_rows: list[dict[str, object]] = []
     for case in cases:
         start = time.monotonic()
         debug_rows = engine.query_debug(case.query, k=k, repo=repo)
@@ -139,6 +140,9 @@ def run_recall_diagnostics(
         hit = rank is not None
         hits += int(hit)
         ranks.append(rank)
+        telemetry = query_telemetry(debug_rows)
+        if telemetry:
+            telemetry_rows.append(telemetry)
         rrf_state = rrf_case_state(debug_rows)
         if rrf_state[0]:
             rrf_active_count += 1
@@ -156,6 +160,7 @@ def run_recall_diagnostics(
                 "rank": rank,
                 "latency_ms": latency_ms,
                 "top_results": [debug_result_to_dict(row) for row in debug_rows],
+                "telemetry": telemetry,
                 "diagnostics": case_diagnostics(case, debug_rows, expected_debug),
             }
         )
@@ -171,9 +176,46 @@ def run_recall_diagnostics(
         "rrf_active_count": rrf_active_count,
         "fallback_count": fallback_count,
         "fallback_reason_counts": fallback_reason_counts,
+        "telemetry": aggregate_telemetry(telemetry_rows),
         "cases": case_reports,
         "misses": [case for case in case_reports if not case["hit"]],
     }
+
+
+def query_telemetry(rows: list[dict[str, object]]) -> dict[str, object]:
+    if not rows:
+        return {}
+    telemetry = rows[0].get("telemetry")
+    return telemetry if isinstance(telemetry, dict) else {}
+
+
+def aggregate_telemetry(rows: list[dict[str, object]]) -> dict[str, object]:
+    numeric: dict[str, list[float]] = {}
+    counts: dict[str, dict[str, int]] = {"candidate_path": {}, "ranking_mode": {}}
+    for row in rows:
+        for key, value in row.items():
+            if isinstance(value, (int, float)):
+                numeric.setdefault(key, []).append(float(value))
+            elif key in counts and isinstance(value, str):
+                counts[key][value] = counts[key].get(value, 0) + 1
+    summary: dict[str, object] = {}
+    for key, values in numeric.items():
+        ordered = sorted(values)
+        summary[key] = {
+            "avg": sum(values) / len(values),
+            "p50": percentile(ordered, 0.50),
+            "p95": percentile(ordered, 0.95),
+            "max": max(values),
+        }
+    summary.update({key: value for key, value in counts.items() if value})
+    return summary
+
+
+def percentile(sorted_values: list[float], ratio: float) -> float:
+    if not sorted_values:
+        return 0.0
+    index = int((len(sorted_values) - 1) * ratio)
+    return sorted_values[index]
 
 
 def rrf_case_state(rows: list[dict[str, object]]) -> tuple[bool, str | None]:
