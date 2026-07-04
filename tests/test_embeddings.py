@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from repo_index_mcp.embeddings import (
@@ -29,6 +31,13 @@ def test_hash_embedding_is_deterministic_and_normalized() -> None:
 
     assert left == right
     assert cosine_similarity(left, right) == pytest.approx(1.0)
+
+
+def test_hash_embedding_batch_matches_single_embeddings() -> None:
+    provider = HashEmbeddingProvider(dimensions=32)
+    texts = ["retry request", "", "timeout"]
+
+    assert provider.embed_batch(texts) == [provider.embed(text) for text in texts]
 
 
 def test_embedding_provider_from_env_defaults_to_hash() -> None:
@@ -81,6 +90,39 @@ def test_embedding_provider_from_env_rejects_unknown_provider() -> None:
 def test_openai_provider_requires_api_key() -> None:
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         OpenAIEmbeddingProvider(api_key="")
+
+
+def test_openai_embed_batch_maps_empty_and_non_empty_inputs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    class Response:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "data": [
+                        {"index": 0, "embedding": [1.0, 0.0]},
+                        {"index": 1, "embedding": [0.0, 1.0]},
+                    ]
+                }
+            ).encode()
+
+    def fake_urlopen(_request, timeout):  # type: ignore[no-untyped-def]
+        assert timeout == 60.0
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    provider._dimensions = 2
+
+    assert provider.embed_batch(["alpha", "", "beta"]) == [
+        [1.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 1.0],
+    ]
 
 
 def test_truncate_text_respects_non_positive_limit() -> None:

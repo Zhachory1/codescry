@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from repo_index_mcp.chunking import LineChunker
-from repo_index_mcp.embeddings import EmbeddingProvider, embedding_provider_from_env
+from repo_index_mcp.embeddings import EmbeddingProvider, embed_batch, embedding_provider_from_env
 from repo_index_mcp.models import IndexResult, SearchResult
 from repo_index_mcp.repo import (
     changed_paths_between,
@@ -135,7 +135,10 @@ class RepoIndex:
                     path=path,
                     content=file_content,
                 )
-                embeddings = [self.embedding_provider.embed(chunk.content) for chunk in chunks]
+                embeddings = embed_batch(
+                    self.embedding_provider,
+                    [chunk.content for chunk in chunks],
+                )
                 chunks_indexed += self.storage.replace_file_chunks(
                     repo_id=repo_id,
                     path=path,
