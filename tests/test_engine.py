@@ -12,6 +12,45 @@ from repo_index_mcp.secrets import looks_like_secret
 from repo_index_mcp.storage import SQLiteStorage
 
 
+class CountingEmbeddingProvider:
+    model_id = "counting-test"
+    dimensions = 4
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, text: str) -> list[float]:
+        self.calls += 1
+        return [1.0, 0.0, 0.0, 0.0] if text.strip() else [0.0, 0.0, 0.0, 0.0]
+
+
+def test_query_embedding_cache_avoids_reembedding_and_hides_raw_query(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def retry_request():\n    return True\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    provider = CountingEmbeddingProvider()
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite", embedding_provider=provider)
+    engine.index_repo(repo)
+
+    calls_after_index = provider.calls
+    engine.query("Where is retry_request?", k=1)
+    calls_after_first_query = provider.calls
+    engine.query("Where is retry_request?", k=1)
+
+    assert calls_after_first_query == calls_after_index + 1
+    assert provider.calls == calls_after_first_query
+    with sqlite3.connect(tmp_path / "index.sqlite") as conn:
+        cache_rows = conn.execute(
+            "SELECT query_hash, embedding FROM query_embedding_cache"
+        ).fetchall()
+        meta_rows = conn.execute("SELECT key, value FROM storage_meta").fetchall()
+    assert len(cache_rows) == 1
+    assert "Where is retry_request?" not in str(cache_rows)
+    assert "Where is retry_request?" not in str(meta_rows)
+
+
 def test_index_repo_and_query_returns_code(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -212,7 +212,7 @@ class RepoIndex:
         language: str | None = None,
         k: int = 10,
     ) -> list[SearchResult]:
-        query_embedding = self.embedding_provider.embed(query)
+        query_embedding, _cache_hit = self._embed_query(query)
         results = self.storage.search(
             query_embedding=query_embedding,
             embedding_model=self.embedding_provider.model_id,
@@ -246,7 +246,7 @@ class RepoIndex:
     ) -> list[dict[str, object]]:
         total_start = time.perf_counter()
         embed_start = time.perf_counter()
-        query_embedding = self.embedding_provider.embed(query)
+        query_embedding, cache_hit = self._embed_query(query)
         embed_ms = int((time.perf_counter() - embed_start) * 1000)
         storage_start = time.perf_counter()
         debug_rows = self.storage.search_debug(
@@ -277,6 +277,7 @@ class RepoIndex:
             telemetry.update(
                 {
                     "embed_query_ms": embed_ms,
+                    "query_embedding_cache_hit": cache_hit,
                     "storage_ms": storage_ms,
                     "repo_status_ms": repo_status_ms,
                     "engine_total_ms": int((time.perf_counter() - total_start) * 1000),
@@ -284,6 +285,37 @@ class RepoIndex:
             )
             output.append({"result": enriched, "score": row["score"], "telemetry": telemetry})
         return output
+
+    def _embed_query(self, query: str) -> tuple[list[float], bool]:
+        fingerprint = self.embedding_provider_fingerprint()
+        try:
+            cached = self.storage.cached_query_embedding(
+                embedding_model=self.embedding_provider.model_id,
+                provider_fingerprint=fingerprint,
+                query_text=query,
+                expected_dimensions=self.embedding_provider.dimensions,
+            )
+        except OSError:
+            cached = None
+        if cached is not None:
+            return cached, True
+        embedding = self.embedding_provider.embed(query)
+        try:
+            self.storage.cache_query_embedding(
+                embedding_model=self.embedding_provider.model_id,
+                provider_fingerprint=fingerprint,
+                query_text=query,
+                embedding=embedding,
+            )
+        except OSError:
+            pass
+        return embedding, False
+
+    def embedding_provider_fingerprint(self) -> str:
+        return (
+            f"{self.embedding_provider.model_id}:"
+            f"dims={self.embedding_provider.dimensions}:cache-v1"
+        )
 
     def expected_path_debug(
         self,
