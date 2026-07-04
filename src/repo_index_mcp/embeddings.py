@@ -18,6 +18,7 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 DEFAULT_SENTENCE_TRANSFORMERS_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS = 6000
+DEFAULT_EMBEDDING_BATCH_SIZE = 64
 
 
 class EmbeddingProvider(Protocol):
@@ -53,6 +54,9 @@ class HashEmbeddingProvider:
             vector[bucket] += sign
 
         return normalize_vector(vector)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
 
 
 class OllamaEmbeddingProvider:
@@ -108,6 +112,9 @@ class OllamaEmbeddingProvider:
             self._dimensions = len(vector)
         return normalize_vector(vector)
 
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
 
 class OpenAIEmbeddingProvider:
     def __init__(
@@ -119,6 +126,7 @@ class OpenAIEmbeddingProvider:
         organization: str | None = None,
         timeout_seconds: float = 60.0,
         max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
+        batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
     ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the openai embedding provider")
@@ -128,6 +136,7 @@ class OpenAIEmbeddingProvider:
         self.organization = organization
         self.timeout_seconds = timeout_seconds
         self.max_chars = max_chars
+        self.batch_size = batch_size
         self._dimensions: int | None = None
 
     @property
@@ -141,40 +150,60 @@ class OpenAIEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
-        if not text.strip():
-            return [0.0] * self.dimensions
-        payload = json.dumps(
-            {"model": self.model, "input": truncate_text(text, self.max_chars)}
-        ).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
-        if self.organization:
-            headers["OpenAI-Organization"] = self.organization
-        request = urllib.request.Request(
-            f"{self.base_url}/embeddings",
-            data=payload,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(
-                f"OpenAI embedding request failed for model {self.model!r} at {self.base_url}"
-            ) from exc
-        try:
-            embedding = data["data"][0]["embedding"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError(
-                "OpenAI embedding response did not include an embedding list"
-            ) from exc
-        vector = [float(value) for value in embedding]
-        if self._dimensions is None:
-            self._dimensions = len(vector)
-        return normalize_vector(vector)
+        return self.embed_batch([text])[0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        output: list[list[float] | None] = [None] * len(texts)
+        empty_indexes: list[int] = []
+        non_empty: list[tuple[int, str]] = []
+        for index, text in enumerate(texts):
+            if text.strip():
+                non_empty.append((index, truncate_text(text, self.max_chars)))
+            else:
+                empty_indexes.append(index)
+        if not non_empty:
+            return [[0.0] * self.dimensions for _text in texts]
+
+        for batch in batched(non_empty, self.batch_size):
+            payload = json.dumps(
+                {"model": self.model, "input": [text for _index, text in batch]}
+            ).encode("utf-8")
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+            if self.organization:
+                headers["OpenAI-Organization"] = self.organization
+            request = urllib.request.Request(
+                f"{self.base_url}/embeddings",
+                data=payload,
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except (OSError, urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"OpenAI embedding request failed for model {self.model!r} at {self.base_url}"
+                ) from exc
+            try:
+                embeddings = data["data"]
+            except (KeyError, TypeError) as exc:
+                raise RuntimeError("OpenAI embedding response did not include data") from exc
+            if len(embeddings) != len(batch):
+                raise RuntimeError("OpenAI embedding response count did not match input count")
+            for fallback_index, item in enumerate(embeddings):
+                source_index = item.get("index", fallback_index)
+                output_index = batch[int(source_index)][0]
+                vector = [float(value) for value in item["embedding"]]
+                if self._dimensions is None:
+                    self._dimensions = len(vector)
+                output[output_index] = normalize_vector(vector)
+        dimensions = self.dimensions
+        for index in empty_indexes:
+            output[index] = [0.0] * dimensions
+        return [vector or [0.0] * dimensions for vector in output]
 
 
 class SentenceTransformerEmbeddingProvider:
@@ -182,6 +211,7 @@ class SentenceTransformerEmbeddingProvider:
         self,
         model: str = DEFAULT_SENTENCE_TRANSFORMERS_MODEL,
         max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
+        batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
     ) -> None:
         try:
             from sentence_transformers import SentenceTransformer
@@ -192,6 +222,7 @@ class SentenceTransformerEmbeddingProvider:
             ) from exc
         self.model_name = model
         self.max_chars = max_chars
+        self.batch_size = batch_size
         self._model = SentenceTransformer(model)
         dimensions = (
             self._model.get_embedding_dimension()
@@ -209,17 +240,32 @@ class SentenceTransformerEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
-        if not text.strip():
-            return [0.0] * self.dimensions
-        embedding = self._model.encode(
-            truncate_text(text, self.max_chars),
-            normalize_embeddings=True,
-        )
-        if hasattr(embedding, "tolist"):
-            values = embedding.tolist()
-        else:
-            values = embedding
-        return normalize_vector([float(value) for value in values])
+        return self.embed_batch([text])[0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        output: list[list[float] | None] = [None] * len(texts)
+        empty_indexes: list[int] = []
+        non_empty: list[tuple[int, str]] = []
+        for index, text in enumerate(texts):
+            if text.strip():
+                non_empty.append((index, truncate_text(text, self.max_chars)))
+            else:
+                empty_indexes.append(index)
+        for batch in batched(non_empty, self.batch_size):
+            embeddings = self._model.encode(
+                [text for _index, text in batch],
+                normalize_embeddings=True,
+            )
+            if hasattr(embeddings, "tolist"):
+                values = embeddings.tolist()
+            else:
+                values = embeddings
+            for (index, _text), vector in zip(batch, values, strict=True):
+                output[index] = normalize_vector([float(value) for value in vector])
+        dimensions = self.dimensions
+        for index in empty_indexes:
+            output[index] = [0.0] * dimensions
+        return [vector or [0.0] * dimensions for vector in output]
 
 
 def embedding_provider_from_env(
@@ -243,11 +289,13 @@ def embedding_provider_from_env(
             base_url=env.get("CODESCRY_OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
             organization=env.get("OPENAI_ORG_ID"),
             max_chars=external_embedding_max_chars(env),
+            batch_size=external_embedding_batch_size(env),
         )
     if provider in {"sentence-transformers", "sentence_transformers", "st"}:
         return SentenceTransformerEmbeddingProvider(
             model=env.get("CODESCRY_ST_MODEL", DEFAULT_SENTENCE_TRANSFORMERS_MODEL),
             max_chars=external_embedding_max_chars(env),
+            batch_size=external_embedding_batch_size(env),
         )
     raise ValueError(
         "unknown CODESCRY_EMBEDDING_PROVIDER "
@@ -259,10 +307,26 @@ def external_embedding_max_chars(env: Mapping[str, str]) -> int:
     return int(env.get("CODESCRY_EMBEDDING_MAX_CHARS", str(DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS)))
 
 
+def external_embedding_batch_size(env: Mapping[str, str]) -> int:
+    return int(env.get("CODESCRY_EMBEDDING_BATCH_SIZE", str(DEFAULT_EMBEDDING_BATCH_SIZE)))
+
+
+def batched(items: list[tuple[int, str]], size: int) -> list[list[tuple[int, str]]]:
+    chunk_size = max(size, 1)
+    return [items[index : index + chunk_size] for index in range(0, len(items), chunk_size)]
+
+
 def truncate_text(text: str, max_chars: int) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def embed_batch(provider: EmbeddingProvider, texts: list[str]) -> list[list[float]]:
+    batch = getattr(provider, "embed_batch", None)
+    if callable(batch):
+        return batch(texts)
+    return [provider.embed(text) for text in texts]
 
 
 def normalize_vector(vector: list[float]) -> list[float]:
