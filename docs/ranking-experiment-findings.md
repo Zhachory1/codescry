@@ -265,7 +265,7 @@ Finding:
 
 ## Experiment 8: OpenAI `text-embedding-3-small`
 
-Evaluated hosted OpenAI embeddings on self, requests, and flask. Full pytest evaluation was stopped because the current single-request-per-chunk provider is too slow for the 15k+ chunk pytest repo.
+Evaluated hosted OpenAI embeddings on self, requests, and flask before provider batching existed. After batching was added, pytest evaluation completed.
 
 ```bash
 CODESCRY_EMBEDDING_PROVIDER=openai \
@@ -280,11 +280,11 @@ Results:
 | self eval | 0.923 / ~0.687 | 0.923 / 0.833 |
 | requests | 0.520 / 0.388 | 0.600 / 0.483 |
 | flask | 0.800 / 0.523 | 0.760 / 0.553 |
-| pytest | 0.480 / 0.268 | not completed |
+| pytest | 0.480 / 0.268 | 0.520 / 0.378 |
 
 Finding:
 
-OpenAI improves requests and MRR, but regresses flask Recall@10 and is too slow to evaluate on larger repos without batching. Do not recommend broad use until provider batching exists.
+OpenAI improves requests and pytest MRR, but regresses flask Recall@10 and has hosted data-boundary costs. Provider batching is required for larger repos.
 
 ## Experiment 9: sentence-transformers `BAAI/bge-small-en-v1.5`
 
@@ -319,7 +319,7 @@ BGE small improves requests and pytest, with better pytest latency than Ollama. 
 6. Hash embedding tweaks can help one repo and hurt another.
 7. Real embeddings improve MRR more reliably than rank-fusion tweaks, but still show repo-specific recall regressions.
 8. `mxbai-embed-large` and BGE small are the best local candidates tested so far.
-9. Hosted OpenAI needs batching before large-repo evaluation is practical.
+9. Hosted OpenAI now has batching, but still needs careful data-boundary review and latency/cost tracking.
 10. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
 
 ## Recommended next bets
@@ -331,7 +331,7 @@ The most likely large improvement is better embeddings, not more rank fusion. Op
 - local embedding model, opt-in
 - hosted embedding provider, explicit opt-in with data-boundary warning
 
-Ollama `mxbai-embed-large` and sentence-transformers BGE small are good enough to keep as supported opt-in providers, but not good enough to make default based on current evals.
+Ollama `mxbai-embed-large`, sentence-transformers BGE small, and OpenAI `text-embedding-3-small` are good enough to keep as supported opt-in providers, but not good enough to make default based on current evals.
 
 Requirements before shipping:
 
