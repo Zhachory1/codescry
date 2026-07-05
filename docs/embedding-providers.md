@@ -105,6 +105,8 @@ openai:text-embedding-3-small
 
 Warning: this provider sends indexed source chunks and search queries to OpenAI. It is explicit opt-in and is not local-first.
 
+OpenAI embedding requests are batched during indexing. Tune with `CODESCRY_EMBEDDING_BATCH_SIZE`; default is `64`.
+
 ## Sentence Transformers provider
 
 Install optional dependency:
@@ -129,6 +131,8 @@ sentence-transformers:BAAI/bge-small-en-v1.5
 
 The model runs locally after download. No source code is uploaded by CodeScry.
 
+Sentence-transformers batches chunks during indexing. Tune with `CODESCRY_EMBEDDING_BATCH_SIZE`; default is `64`.
+
 ## Long chunks
 
 External providers receive at most `CODESCRY_EMBEDDING_MAX_CHARS` characters per chunk. Default: `6000`.
@@ -138,6 +142,16 @@ CODESCRY_EMBEDDING_MAX_CHARS=6000
 ```
 
 This avoids context-window failures for local and hosted embedding models. Hash embeddings do not use this limit.
+
+## Batch size
+
+OpenAI and sentence-transformers providers batch non-empty chunks during indexing. Default batch size: `64`.
+
+```bash
+CODESCRY_EMBEDDING_BATCH_SIZE=64
+```
+
+Lower this if a provider/API returns payload-size or memory errors. Ollama currently embeds one text at a time.
 
 ## Evaluation
 

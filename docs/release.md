@@ -19,17 +19,26 @@ Release artifacts ship code only. Do not publish local index data.
 2. Run checks:
 
    ```bash
+   uv run ruff check .
    uv run pytest
+   codescry eval evals/golden.codescry.jsonl . -k 10 --fail-under 0.85
    uv build
    ```
 
-3. Publish:
+3. For ranking or embedding-provider changes, run relevant public/provider evals and update `docs/ranking-experiment-findings.md`.
+
+4. For data-boundary-affecting changes, review:
+   - `README.md`
+   - `SECURITY.md`
+   - `docs/embedding-providers.md`
+
+5. Publish:
 
    ```bash
    uv publish
    ```
 
-4. Verify:
+6. Verify:
 
    ```bash
    uvx codescry doctor
@@ -50,6 +59,8 @@ Release artifacts ship code only. Do not publish local index data.
    ```bash
    npm pack --dry-run
    ```
+
+   Expected docs include `docs/embedding-providers.md`, `docs/evals.md`, and `docs/ranking-experiment-findings.md`.
 
 4. Publish:
 
