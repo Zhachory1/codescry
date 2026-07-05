@@ -13,6 +13,17 @@
 - Ollama sends chunks and queries to the configured Ollama URL. This stays local only if `CODESCRY_OLLAMA_URL` points to a local server.
 - OpenAI embeddings are explicit opt-in and send indexed source chunks and search queries to OpenAI or the configured OpenAI-compatible endpoint.
 
+## Usage logs
+
+Usage logs are local and opt-in for passive search events.
+
+- Default path: `~/.codescry/usage.jsonl`.
+- Passive query logging requires `CODESCRY_ENABLE_USAGE_LOG=1`.
+- Snippets are not stored in usage logs.
+- Raw query and miss text are not stored by default; CodeScry stores local salted text IDs and lengths.
+- `CODESCRY_LOG_RAW_TEXT=1` stores raw query/miss text locally and should be used only when you explicitly want that data retained.
+- Disable logging for a command with `CODESCRY_DISABLE_USAGE_LOG=1`.
+
 ## Secret handling
 
 The indexer has a best-effort local guardrail for high-confidence secret patterns:

@@ -1,9 +1,26 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/Zhachory1/codescry/main/assets/codescry_logo.png" alt="CodeScry logo" width="180">
   <h1>CodeScry</h1>
+  <p>
+    <a href="https://github.com/Zhachory1/codescry/actions/workflows/ci.yml"><img src="https://github.com/Zhachory1/codescry/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://pypi.org/project/codescry/"><img src="https://img.shields.io/pypi/v/codescry.svg" alt="PyPI"></a>
+    <a href="https://pypi.org/project/codescry/"><img src="https://img.shields.io/pypi/pyversions/codescry.svg" alt="Python versions"></a>
+    <a href="https://www.npmjs.com/package/codescry"><img src="https://img.shields.io/npm/v/codescry.svg" alt="npm"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  </p>
 </div>
 
 CodeScry is a local codebase retrieval tool for coding agents. It indexes committed code from local git repos into a local SQLite database, then exposes ranked snippets through a CLI and MCP stdio server.
+
+## Why CodeScry
+
+- Local-first by default: hash embeddings, SQLite storage, no source upload.
+- Agent-ready: MCP tools for `search_code`, `get_symbol`, `list_repos`, and `reindex`.
+- Large-index aware: bounded sqlite-vec candidate paths avoid scoring every chunk once vectors are backfilled.
+- Semantic opt-in: Ollama, OpenAI, and sentence-transformers providers are available when quality matters more than default speed.
+- Measured on real repos: public agent-natural evals and ranking/performance findings live in `docs/ranking-experiment-findings.md`.
+
+Recent private `~/code` mxbai eval improved from ~20.7s average query latency to ~1.8s after filtered vector serving optimizations, with Recall@10 stable at 0.800. See `docs/performance.md` for knobs and diagnostics.
 
 ## Install
 
@@ -144,6 +161,7 @@ They preserve the selected DB path and must not fail git commands.
 - `docs/cli-reference.md` — command reference.
 - `docs/output-schema.md` — JSON fields.
 - `docs/evals.md` — eval authoring and gate.
+- `docs/performance.md` — query/index latency knobs, candidate union, batching, and debug telemetry.
 - `docs/embedding-providers.md` — hash, Ollama, OpenAI, and sentence-transformers embedding providers.
 - `docs/pilot.md` — 5-engineer pilot measurement plan and local reporting commands.
 - `docs/language-support.md` — parser/regex/window support matrix.
@@ -188,6 +206,7 @@ See `docs/pilot.md` for activation, timing, miss capture, and decision gates.
 
 - Default embeddings are local deterministic hash vectors.
 - Default configuration does not send source code to external APIs.
+- OpenAI and non-local Ollama embedding endpoints send chunks and queries outside your machine. See `SECURITY.md` and `docs/embedding-providers.md`.
 - Index data is local SQLite derived data and can be deleted/rebuilt.
 - Files matching high-confidence secret patterns are skipped and prior chunks for those paths are removed.
 - Secret skipping is a best-effort local guardrail, not a guarantee. See `SECURITY.md`.
