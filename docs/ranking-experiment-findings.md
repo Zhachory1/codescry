@@ -282,9 +282,18 @@ Results:
 | flask | 0.800 / 0.523 | 0.760 / 0.553 |
 | pytest | 0.480 / 0.268 | 0.520 / 0.378 |
 
+Latency observed during eval:
+
+| Dataset | Default hash avg latency | OpenAI avg latency | Slowdown |
+| --- | ---: | ---: | ---: |
+| self eval | ~156ms | ~749ms | ~4.8x |
+| requests | ~283ms | ~1047ms | ~3.7x |
+| flask | ~460ms | ~1645ms | ~3.6x |
+| pytest | ~2428ms | ~7086ms | ~2.9x |
+
 Finding:
 
-OpenAI improves requests and pytest MRR, but regresses flask Recall@10 and has hosted data-boundary costs. Provider batching is required for larger repos.
+OpenAI improves MRR on every tested dataset, improves Recall@10 on requests and pytest, holds self Recall@10, and regresses flask Recall@10. It is a useful opt-in hosted provider when rank quality matters, but it is not a default candidate because latency is materially higher and source chunks/search queries leave the machine. Provider batching is required for larger repos.
 
 ## Experiment 9: sentence-transformers `BAAI/bge-small-en-v1.5`
 
@@ -319,7 +328,7 @@ BGE small improves requests and pytest, with better pytest latency than Ollama. 
 6. Hash embedding tweaks can help one repo and hurt another.
 7. Real embeddings improve MRR more reliably than rank-fusion tweaks, but still show repo-specific recall regressions.
 8. `mxbai-embed-large` and BGE small are the best local candidates tested so far.
-9. Hosted OpenAI now has batching, but still needs careful data-boundary review and latency/cost tracking.
+9. Hosted OpenAI improves MRR consistently, but needs careful data-boundary review, cost tracking, and latency expectations.
 10. Active/fallback instrumentation is mandatory; a flagged ranking mode can otherwise appear to pass while silently falling back.
 
 ## Recommended next bets
@@ -331,7 +340,7 @@ The most likely large improvement is better embeddings, not more rank fusion. Op
 - local embedding model, opt-in
 - hosted embedding provider, explicit opt-in with data-boundary warning
 
-Ollama `mxbai-embed-large`, sentence-transformers BGE small, and OpenAI `text-embedding-3-small` are good enough to keep as supported opt-in providers, but not good enough to make default based on current evals.
+Ollama `mxbai-embed-large`, sentence-transformers BGE small, and OpenAI `text-embedding-3-small` are good enough to keep as supported opt-in providers, but not good enough to make default based on current evals. OpenAI is strongest for MRR among hosted options tested so far, while local mxbai/BGE avoid source upload.
 
 Requirements before shipping:
 
