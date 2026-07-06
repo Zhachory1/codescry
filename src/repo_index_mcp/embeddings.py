@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -17,6 +18,8 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
+DEFAULT_OPENAI_MAX_RETRIES = 3
+DEFAULT_OPENAI_RETRY_BASE_SECONDS = 1.0
 DEFAULT_SENTENCE_TRANSFORMERS_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS = 6000
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
@@ -192,6 +195,8 @@ class OpenAIEmbeddingProvider:
         timeout_seconds: float = 60.0,
         max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
         batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
+        max_retries: int = DEFAULT_OPENAI_MAX_RETRIES,
+        retry_base_seconds: float = DEFAULT_OPENAI_RETRY_BASE_SECONDS,
     ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the openai embedding provider")
@@ -202,6 +207,8 @@ class OpenAIEmbeddingProvider:
         self.timeout_seconds = timeout_seconds
         self.max_chars = max_chars
         self.batch_size = batch_size
+        self.max_retries = max(max_retries, 0)
+        self.retry_base_seconds = max(retry_base_seconds, 0.0)
         self._dimensions: int | None = None
 
     @property
@@ -245,13 +252,7 @@ class OpenAIEmbeddingProvider:
                 headers=headers,
                 method="POST",
             )
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-            except (OSError, urllib.error.URLError, TimeoutError) as exc:
-                raise RuntimeError(
-                    f"OpenAI embedding request failed for model {self.model!r} at {self.base_url}"
-                ) from exc
+            data = self._post_json_with_retries(request)
             try:
                 embeddings = data["data"]
             except (KeyError, TypeError) as exc:
@@ -269,6 +270,32 @@ class OpenAIEmbeddingProvider:
         for index in empty_indexes:
             output[index] = [0.0] * dimensions
         return [vector or [0.0] * dimensions for vector in output]
+
+    def _post_json_with_retries(self, request: urllib.request.Request) -> dict[str, object]:
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                retryable_statuses = {408, 409, 429, 500, 502, 503, 504}
+                if attempt >= self.max_retries or exc.code not in retryable_statuses:
+                    raise RuntimeError(
+                        f"OpenAI embedding request failed for model {self.model!r} "
+                        f"at {self.base_url}: HTTP {exc.code}"
+                    ) from exc
+                sleep_for = retry_sleep_seconds(exc, attempt, self.retry_base_seconds)
+            except (OSError, urllib.error.URLError, TimeoutError) as exc:
+                if attempt >= self.max_retries:
+                    raise RuntimeError(
+                        f"OpenAI embedding request failed for model {self.model!r} "
+                        f"at {self.base_url}"
+                    ) from exc
+                sleep_for = self.retry_base_seconds * (2**attempt)
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+        raise RuntimeError(
+            f"OpenAI embedding request failed for model {self.model!r} at {self.base_url}"
+        )
 
 
 class SentenceTransformerEmbeddingProvider:
@@ -357,6 +384,8 @@ def embedding_provider_from_env(
             organization=env.get("OPENAI_ORG_ID"),
             max_chars=external_embedding_max_chars(env),
             batch_size=external_embedding_batch_size(env),
+            max_retries=openai_max_retries(env),
+            retry_base_seconds=openai_retry_base_seconds(env),
         )
     if provider in {"sentence-transformers", "sentence_transformers", "st"}:
         return SentenceTransformerEmbeddingProvider(
@@ -378,8 +407,34 @@ def external_embedding_batch_size(env: Mapping[str, str]) -> int:
     return int(env.get("CODESCRY_EMBEDDING_BATCH_SIZE", str(DEFAULT_EMBEDDING_BATCH_SIZE)))
 
 
+def openai_max_retries(env: Mapping[str, str]) -> int:
+    return max(int(env.get("CODESCRY_OPENAI_MAX_RETRIES", str(DEFAULT_OPENAI_MAX_RETRIES))), 0)
+
+
+def openai_retry_base_seconds(env: Mapping[str, str]) -> float:
+    configured = env.get(
+        "CODESCRY_OPENAI_RETRY_BASE_SECONDS",
+        str(DEFAULT_OPENAI_RETRY_BASE_SECONDS),
+    )
+    return max(float(configured), 0.0)
+
+
 def ollama_concurrency(env: Mapping[str, str]) -> int:
     return max(int(env.get("CODESCRY_OLLAMA_CONCURRENCY", str(DEFAULT_OLLAMA_CONCURRENCY))), 1)
+
+
+def retry_sleep_seconds(
+    error: urllib.error.HTTPError,
+    attempt: int,
+    retry_base_seconds: float,
+) -> float:
+    retry_after = error.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(float(retry_after), 0.0)
+        except ValueError:
+            pass
+    return retry_base_seconds * (2**attempt)
 
 
 def batched(items: list[tuple[int, str]], size: int) -> list[list[tuple[int, str]]]:

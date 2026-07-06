@@ -107,6 +107,13 @@ Warning: this provider sends indexed source chunks and search queries to OpenAI.
 
 OpenAI embedding requests are batched during indexing. Tune with `CODESCRY_EMBEDDING_BATCH_SIZE`; default is `64`.
 
+Retry behavior for transient OpenAI errors can be tuned:
+
+```bash
+CODESCRY_OPENAI_MAX_RETRIES=3
+CODESCRY_OPENAI_RETRY_BASE_SECONDS=1
+```
+
 ## Sentence Transformers provider
 
 Install optional dependency:

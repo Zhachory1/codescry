@@ -59,6 +59,8 @@ Embedding providers:
 - `CODESCRY_OPENAI_MODEL`: OpenAI model, default `text-embedding-3-small`.
 - `CODESCRY_OPENAI_BASE_URL`: OpenAI-compatible base URL.
 - `OPENAI_ORG_ID`: optional OpenAI organization.
+- `CODESCRY_OPENAI_MAX_RETRIES`: retry count for transient OpenAI errors, default `3`.
+- `CODESCRY_OPENAI_RETRY_BASE_SECONDS`: exponential backoff base seconds, default `1`.
 - `CODESCRY_ST_MODEL`: sentence-transformers model, default `BAAI/bge-small-en-v1.5`.
 - `CODESCRY_EMBEDDING_MAX_CHARS`: max chars sent per chunk for external providers, default `6000`.
 - `CODESCRY_EMBEDDING_BATCH_SIZE`: OpenAI/sentence-transformers batch size, default `64`.
