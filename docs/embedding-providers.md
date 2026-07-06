@@ -151,7 +151,13 @@ OpenAI and sentence-transformers providers batch non-empty chunks during indexin
 CODESCRY_EMBEDDING_BATCH_SIZE=64
 ```
 
-Lower this if a provider/API returns payload-size or memory errors. Ollama currently embeds one text at a time.
+Lower this if a provider/API returns payload-size or memory errors. Ollama uses its batch embedding endpoint when available and falls back to one-at-a-time requests if the batch endpoint fails.
+
+Ollama fallback concurrency defaults to `4` and can be tuned:
+
+```bash
+CODESCRY_OLLAMA_CONCURRENCY=4
+```
 
 ## Evaluation
 
