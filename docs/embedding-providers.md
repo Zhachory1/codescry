@@ -105,6 +105,8 @@ openai:text-embedding-3-small
 
 Warning: this provider sends indexed source chunks and search queries to OpenAI. It is explicit opt-in and is not local-first.
 
+OpenAI improved MRR in the public evals, but was roughly 3-5x slower than default hash embeddings in query latency. Use it when hosted semantic quality is worth the data-boundary, latency, and cost tradeoffs.
+
 OpenAI embedding requests are batched during indexing. Tune with `CODESCRY_EMBEDDING_BATCH_SIZE`; default is `64`.
 
 Retry behavior for transient OpenAI errors can be tuned:
