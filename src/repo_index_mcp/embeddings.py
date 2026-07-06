@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import math
@@ -19,6 +20,7 @@ DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 DEFAULT_SENTENCE_TRANSFORMERS_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS = 6000
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
+DEFAULT_OLLAMA_CONCURRENCY = 4
 
 
 class EmbeddingProvider(Protocol):
@@ -67,11 +69,15 @@ class OllamaEmbeddingProvider:
         base_url: str = DEFAULT_OLLAMA_URL,
         timeout_seconds: float = 60.0,
         max_chars: int = DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS,
+        concurrency: int = DEFAULT_OLLAMA_CONCURRENCY,
+        batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.max_chars = max_chars
+        self.concurrency = max(concurrency, 1)
+        self.batch_size = max(batch_size, 1)
         self._dimensions: int | None = None
 
     @property
@@ -85,6 +91,9 @@ class OllamaEmbeddingProvider:
         return self._dimensions
 
     def embed(self, text: str) -> list[float]:
+        return self.embed_batch([text])[0]
+
+    def _embed_one_legacy(self, text: str) -> list[float]:
         if not text.strip():
             return [0.0] * self.dimensions
         payload = json.dumps(
@@ -96,14 +105,7 @@ class OllamaEmbeddingProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(
-                f"Ollama embedding request failed for model {self.model!r} at {self.base_url}. "
-                "Ensure Ollama is running and the model is pulled."
-            ) from exc
+        data = self._post_json(request)
         embedding = data.get("embedding")
         if not isinstance(embedding, list):
             raise RuntimeError("Ollama embedding response did not include an embedding list")
@@ -113,7 +115,70 @@ class OllamaEmbeddingProvider:
         return normalize_vector(vector)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed(text) for text in texts]
+        output: list[list[float] | None] = [None] * len(texts)
+        empty_indexes: list[int] = []
+        non_empty: list[tuple[int, str]] = []
+        for index, text in enumerate(texts):
+            if text.strip():
+                non_empty.append((index, truncate_text(text, self.max_chars)))
+            else:
+                empty_indexes.append(index)
+        if not non_empty:
+            return [[0.0] * self.dimensions for _text in texts]
+
+        try:
+            for batch in batched(non_empty, self.batch_size):
+                embeddings = self._embed_many(batch)
+                for (index, _text), vector in zip(batch, embeddings, strict=True):
+                    output[index] = vector
+        except RuntimeError:
+            texts_to_embed = [text for _index, text in non_empty]
+            if self.concurrency == 1:
+                fallback_vectors = [self._embed_one_legacy(text) for text in texts_to_embed]
+            else:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=self.concurrency
+                ) as executor:
+                    fallback_vectors = list(executor.map(self._embed_one_legacy, texts_to_embed))
+            for (index, _text), vector in zip(non_empty, fallback_vectors, strict=True):
+                output[index] = vector
+
+        dimensions = self.dimensions
+        for index in empty_indexes:
+            output[index] = [0.0] * dimensions
+        return [vector or [0.0] * dimensions for vector in output]
+
+    def _embed_many(self, batch: list[tuple[int, str]]) -> list[list[float]]:
+        payload = json.dumps(
+            {"model": self.model, "input": [text for _index, text in batch]}
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/api/embed",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        data = self._post_json(request)
+        embeddings = data.get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != len(batch):
+            raise RuntimeError("Ollama batch embedding response did not include embeddings")
+        vectors: list[list[float]] = []
+        for embedding in embeddings:
+            vector = [float(value) for value in embedding]
+            if self._dimensions is None:
+                self._dimensions = len(vector)
+            vectors.append(normalize_vector(vector))
+        return vectors
+
+    def _post_json(self, request: urllib.request.Request) -> dict[str, object]:
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"Ollama embedding request failed for model {self.model!r} at {self.base_url}. "
+                "Ensure Ollama is running and the model is pulled."
+            ) from exc
 
 
 class OpenAIEmbeddingProvider:
@@ -281,6 +346,8 @@ def embedding_provider_from_env(
             model=env.get("CODESCRY_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
             base_url=env.get("CODESCRY_OLLAMA_URL", DEFAULT_OLLAMA_URL),
             max_chars=external_embedding_max_chars(env),
+            concurrency=ollama_concurrency(env),
+            batch_size=external_embedding_batch_size(env),
         )
     if provider == "openai":
         return OpenAIEmbeddingProvider(
@@ -309,6 +376,10 @@ def external_embedding_max_chars(env: Mapping[str, str]) -> int:
 
 def external_embedding_batch_size(env: Mapping[str, str]) -> int:
     return int(env.get("CODESCRY_EMBEDDING_BATCH_SIZE", str(DEFAULT_EMBEDDING_BATCH_SIZE)))
+
+
+def ollama_concurrency(env: Mapping[str, str]) -> int:
+    return max(int(env.get("CODESCRY_OLLAMA_CONCURRENCY", str(DEFAULT_OLLAMA_CONCURRENCY))), 1)
 
 
 def batched(items: list[tuple[int, str]], size: int) -> list[list[tuple[int, str]]]:

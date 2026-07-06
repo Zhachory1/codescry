@@ -25,6 +25,7 @@ from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
 from repo_index_mcp.storage import SQLiteStorage
 
 DEFAULT_DB_PATH = Path.home() / ".codescry" / "index.sqlite"
+DEFAULT_INDEX_EMBEDDING_BATCH_CHUNKS = 256
 
 
 class RepoIndex:
@@ -127,6 +128,62 @@ class RepoIndex:
         except Exception as exc:
             errors.append(f"delete removed paths: {exc}")
 
+        pending: list[tuple[str, str, list]] = []
+        pending_chunk_count = 0
+        index_batch_chunks = index_embedding_batch_chunks()
+
+        def embed_texts_limited(texts: list[str]) -> list[list[float]]:
+            embeddings: list[list[float]] = []
+            for start_index in range(0, len(texts), index_batch_chunks):
+                embeddings.extend(
+                    embed_batch(
+                        self.embedding_provider,
+                        texts[start_index : start_index + index_batch_chunks],
+                    )
+                )
+            return embeddings
+
+        def flush_pending() -> None:
+            nonlocal chunks_indexed, pending, pending_chunk_count
+            if not pending:
+                return
+            flat_chunks = [chunk for _path, _content_hash, chunks in pending for chunk in chunks]
+            try:
+                flat_embeddings = embed_texts_limited([chunk.content for chunk in flat_chunks])
+                offset = 0
+                for path, file_hash, chunks in pending:
+                    next_offset = offset + len(chunks)
+                    chunks_indexed += self.storage.replace_file_chunks(
+                        repo_id=repo_id,
+                        path=path,
+                        content_hash=file_hash,
+                        chunks=chunks,
+                        embeddings=flat_embeddings[offset:next_offset],
+                        commit_sha=commit_sha,
+                        embedding_model=expected_model,
+                        chunker_version=chunker_version,
+                    )
+                    offset = next_offset
+            except Exception:
+                for path, file_hash, chunks in pending:
+                    try:
+                        embeddings = embed_texts_limited([chunk.content for chunk in chunks])
+                        chunks_indexed += self.storage.replace_file_chunks(
+                            repo_id=repo_id,
+                            path=path,
+                            content_hash=file_hash,
+                            chunks=chunks,
+                            embeddings=embeddings,
+                            commit_sha=commit_sha,
+                            embedding_model=expected_model,
+                            chunker_version=chunker_version,
+                        )
+                    except Exception as exc:
+                        errors.append(f"{path}: {exc}")
+            finally:
+                pending = []
+                pending_chunk_count = 0
+
         for path, file_content in changed_files:
             try:
                 chunks = self.chunker.chunk_file(
@@ -135,22 +192,16 @@ class RepoIndex:
                     path=path,
                     content=file_content,
                 )
-                embeddings = embed_batch(
-                    self.embedding_provider,
-                    [chunk.content for chunk in chunks],
-                )
-                chunks_indexed += self.storage.replace_file_chunks(
-                    repo_id=repo_id,
-                    path=path,
-                    content_hash=current_hashes[path],
-                    chunks=chunks,
-                    embeddings=embeddings,
-                    commit_sha=commit_sha,
-                    embedding_model=expected_model,
-                    chunker_version=chunker_version,
-                )
             except Exception as exc:
                 errors.append(f"{path}: {exc}")
+                continue
+            if pending and pending_chunk_count + len(chunks) > index_batch_chunks:
+                flush_pending()
+            pending.append((path, current_hashes[path], chunks))
+            pending_chunk_count += len(chunks)
+            if pending_chunk_count >= index_batch_chunks:
+                flush_pending()
+        flush_pending()
 
         last_error = "; ".join(errors) if errors else None
         if errors:
@@ -384,6 +435,16 @@ class RepoIndex:
         if len(repo_paths) != 1:
             raise ValueError("repo_path is required unless exactly one repo is indexed")
         return self.index_repo(repo_paths[0])
+
+
+def index_embedding_batch_chunks() -> int:
+    import os
+
+    configured = os.environ.get(
+        "CODESCRY_INDEX_EMBEDDING_BATCH_CHUNKS",
+        str(DEFAULT_INDEX_EMBEDDING_BATCH_CHUNKS),
+    )
+    return max(int(configured), 1)
 
 
 def filter_secret_files(files: Iterable[tuple[str, str]]) -> tuple[list[tuple[str, str]], set[str]]:

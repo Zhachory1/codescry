@@ -67,6 +67,35 @@ def test_embedding_provider_from_env_creates_ollama_without_network_call() -> No
 
     assert isinstance(provider, OllamaEmbeddingProvider)
     assert provider.model_id == "ollama:nomic-embed-text@http://localhost:11434"
+    assert provider.concurrency == 4
+
+
+def test_ollama_embed_batch_preserves_order(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    provider = OllamaEmbeddingProvider(concurrency=4)
+
+    def fake_embed_many(batch):  # type: ignore[no-untyped-def]
+        return [[float(len(text))] for _index, text in batch]
+
+    monkeypatch.setattr(provider, "_embed_many", fake_embed_many)
+    provider._dimensions = 1
+
+    assert provider.embed_batch(["a", "abcd", "ab"]) == [[1.0], [4.0], [2.0]]
+
+
+def test_ollama_batch_falls_back_to_legacy_when_batch_endpoint_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    provider = OllamaEmbeddingProvider(concurrency=1)
+
+    def fail_embed_many(_batch):  # type: ignore[no-untyped-def]
+        raise RuntimeError("batch unsupported")
+
+    def fake_legacy(text: str) -> list[float]:
+        return [float(len(text))]
+
+    monkeypatch.setattr(provider, "_embed_many", fail_embed_many)
+    monkeypatch.setattr(provider, "_embed_one_legacy", fake_legacy)
+    provider._dimensions = 1
+
+    assert provider.embed_batch(["a", "abcd"]) == [[1.0], [4.0]]
 
 
 def test_embedding_provider_from_env_creates_openai_without_network_call() -> None:
