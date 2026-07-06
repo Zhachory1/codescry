@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -300,6 +301,94 @@ def test_eval_add_appends_jsonl(tmp_path: Path) -> None:
     ]) == 0
 
     assert "retry request" in golden.read_text(encoding="utf-8")
+
+
+def test_index_root_jsonl_streams_results_and_summary(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "app.py").write_text("def first_service(): pass\n", encoding="utf-8")
+    (second / "app.py").write_text("def second_service(): pass\n", encoding="utf-8")
+    init_repo(first)
+    init_repo(second)
+    commit_all(first, "init")
+    commit_all(second, "init")
+
+    result = main([
+        "--db",
+        str(tmp_path / "index.sqlite"),
+        "index-root",
+        str(tmp_path),
+        "--jsonl",
+        "--limit",
+        "1",
+    ])
+
+    assert result == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["repo_path"].endswith("first")
+    assert lines[1]["event"] == "summary"
+    assert lines[1]["repos_discovered"] == 2
+    assert lines[1]["repos_selected"] == 1
+    assert lines[1]["repos_indexed"] == 1
+
+
+def test_index_root_progress_prints_to_stderr(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def service(): pass\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    result = main([
+        "--db",
+        str(tmp_path / "index.sqlite"),
+        "index-root",
+        str(tmp_path),
+        "--progress",
+    ])
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert "[1/1] indexing" in captured.err
+    assert "[1/1] done" in captured.err
+
+
+def test_index_root_max_duration_can_stop_before_indexing(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+
+    times = iter([0.0, 2.0, 2.0])
+    monkeypatch.setattr("repo_index_mcp.cli.time.monotonic", lambda: next(times))
+
+    result = main([
+        "--db",
+        str(tmp_path / "index.sqlite"),
+        "index-root",
+        str(tmp_path),
+        "--jsonl",
+        "--max-duration",
+        "1",
+    ])
+
+    assert result == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert lines[-1]["event"] == "summary"
+    assert lines[-1]["stopped_early"] is True
+    assert lines[-1]["repos_indexed"] == 0
 
 
 def test_eval_returns_nonzero_when_indexing_fails(tmp_path: Path) -> None:
