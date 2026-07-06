@@ -4,7 +4,6 @@
   <p>
     <a href="https://github.com/Zhachory1/codescry/actions/workflows/ci.yml"><img src="https://github.com/Zhachory1/codescry/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://pypi.org/project/codescry/"><img src="https://img.shields.io/pypi/v/codescry.svg" alt="PyPI"></a>
-    <a href="https://pypi.org/project/codescry/"><img src="https://img.shields.io/pypi/pyversions/codescry.svg" alt="Python versions"></a>
     <a href="https://www.npmjs.com/package/codescry"><img src="https://img.shields.io/npm/v/codescry.svg" alt="npm"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   </p>
