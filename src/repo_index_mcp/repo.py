@@ -113,16 +113,48 @@ def current_commit(repo_root: Path) -> str:
     return _git(repo_root, "rev-parse", "HEAD").strip()
 
 
-def discover_repos(root: str | Path) -> list[Path]:
+def discover_repos(root: str | Path, *, include_worktrees: bool = False) -> list[Path]:
+    repos, _skipped_worktrees = discover_repos_with_skipped(
+        root,
+        include_worktrees=include_worktrees,
+    )
+    return repos
+
+
+def discover_repos_with_skipped(
+    root: str | Path,
+    *,
+    include_worktrees: bool = False,
+) -> tuple[list[Path], int]:
     root_path = Path(root).expanduser().resolve()
     repos: list[Path] = []
+    skipped_worktrees = 0
     for current, dirnames, filenames in os.walk(root_path):
+        current_path = Path(current).resolve()
         if ".git" in dirnames or ".git" in filenames:
-            repos.append(Path(current).resolve())
+            if not include_worktrees and is_linked_worktree(current_path):
+                skipped_worktrees += 1
+            else:
+                repos.append(current_path)
             dirnames[:] = []
             continue
         dirnames[:] = [name for name in dirnames if not should_prune_dir(name)]
-    return sorted(repos)
+    return sorted(repos), skipped_worktrees
+
+
+def is_linked_worktree(repo_path: Path) -> bool:
+    git_file = repo_path / ".git"
+    if not git_file.is_file():
+        return False
+    try:
+        content = git_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    if not first_line.startswith("gitdir:"):
+        return False
+    normalized = first_line.replace("\\", "/")
+    return "/worktrees/" in normalized
 
 
 def tracked_files(repo_root: Path) -> list[str]:

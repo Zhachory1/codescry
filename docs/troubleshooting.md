@@ -41,6 +41,8 @@ codescry index-root ~/code --jsonl --limit 5
 
 `--jsonl` streams one result per line plus a summary line, so caller timeouts do not lose all progress output.
 
+Linked git worktrees are skipped by default because they usually duplicate another checkout. Use `--include-worktrees` only if you intentionally want each worktree indexed as its own repo.
+
 ## Results are stale
 
 ```bash

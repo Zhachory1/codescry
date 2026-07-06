@@ -17,7 +17,7 @@ from repo_index_mcp.eval import (
     run_recall_eval,
 )
 from repo_index_mcp.hooks import install_hooks
-from repo_index_mcp.repo import discover_repos
+from repo_index_mcp.repo import discover_repos, discover_repos_with_skipped
 from repo_index_mcp.secrets import looks_like_secret
 from repo_index_mcp.storage import rrf_ranking_enabled
 from repo_index_mcp.usage import (
@@ -202,11 +202,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def handle_index_root(args: argparse.Namespace) -> int:
     engine = RepoIndex(db_path=args.db)
-    repo_paths = discover_repos(args.root_path)
+    repo_paths, skipped_worktrees = discover_repos_with_skipped(
+        args.root_path,
+        include_worktrees=args.include_worktrees,
+    )
     total_discovered = len(repo_paths)
     if args.limit is not None:
         repo_paths = repo_paths[: args.limit]
     total_selected = len(repo_paths)
+    if args.progress and skipped_worktrees:
+        print(f"skipped {skipped_worktrees} linked worktree(s)", file=sys.stderr, flush=True)
     started_at = time.monotonic()
     results = []
     stopped_early = False
@@ -256,6 +261,7 @@ def handle_index_root(args: argparse.Namespace) -> int:
         "root_path": str(Path(args.root_path).expanduser()),
         "repos_discovered": total_discovered,
         "repos_selected": total_selected,
+        "worktrees_skipped": skipped_worktrees,
         "repos_indexed": len(results),
         "stopped_early": stopped_early,
         "duration_ms": elapsed_ms,
@@ -299,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print per-repo progress to stderr",
     )
     index_root.add_argument("--jsonl", action="store_true", help="stream one JSON result per line")
+    index_root.add_argument(
+        "--include-worktrees",
+        action="store_true",
+        help="include linked git worktrees discovered under root",
+    )
     index_root.add_argument("--limit", type=positive_int, help="index at most N discovered repos")
     index_root.add_argument(
         "--max-duration",

@@ -17,6 +17,7 @@ codescry index-root ~/code
 codescry index-root ~/code --progress
 codescry index-root ~/code --jsonl --limit 5
 codescry index-root ~/code --jsonl --max-duration 1800
+codescry index-root ~/code --include-worktrees
 codescry query "retry backoff" -k 5
 codescry query "retry backoff" --repo /path/to/repo --path-prefix src/ --language python -k 5
 codescry get-symbol RepoIndex --repo /path/to/repo

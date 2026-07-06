@@ -338,6 +338,42 @@ def test_index_root_jsonl_streams_results_and_summary(
     assert lines[1]["repos_indexed"] == 1
 
 
+def test_index_root_skips_worktrees_by_default(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text(
+        "gitdir: /tmp/example.git/worktrees/worktree\n",
+        encoding="utf-8",
+    )
+
+    result = main([
+        "--db",
+        str(tmp_path / "index.sqlite"),
+        "index-root",
+        str(tmp_path),
+        "--jsonl",
+    ])
+
+    assert result == 0
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert lines == [
+        {
+            "event": "summary",
+            "root_path": str(tmp_path),
+            "repos_discovered": 0,
+            "repos_selected": 0,
+            "worktrees_skipped": 1,
+            "repos_indexed": 0,
+            "stopped_early": False,
+            "duration_ms": lines[0]["duration_ms"],
+            "error_count": 0,
+        }
+    ]
+
+
 def test_index_root_progress_prints_to_stderr(
     tmp_path: Path,
     capsys,  # type: ignore[no-untyped-def]

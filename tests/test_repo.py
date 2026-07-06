@@ -4,6 +4,7 @@ from pathlib import Path
 from repo_index_mcp.repo import (
     content_hash,
     discover_repos,
+    discover_repos_with_skipped,
     sanitize_remote_url,
     should_prune_dir,
     should_skip,
@@ -25,12 +26,16 @@ def test_discover_repos_skips_generated_dirs(tmp_path: Path) -> None:
     assert discover_repos(tmp_path) == [repo]
 
 
-def test_discover_repos_detects_gitfile_worktree_shape(tmp_path: Path) -> None:
+def test_discover_repos_skips_linked_worktree_by_default(tmp_path: Path) -> None:
     repo = tmp_path / "worktree"
     repo.mkdir()
     (repo / ".git").write_text("gitdir: /tmp/example.git/worktrees/worktree\n", encoding="utf-8")
 
-    assert discover_repos(tmp_path) == [repo]
+    repos, skipped = discover_repos_with_skipped(tmp_path)
+
+    assert repos == []
+    assert skipped == 1
+    assert discover_repos(tmp_path, include_worktrees=True) == [repo]
 
 
 def test_skip_rules() -> None:

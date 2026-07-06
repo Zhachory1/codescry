@@ -7,6 +7,8 @@ codescry index-root ~/code
 codescry status
 ```
 
+`index-root` skips linked git worktrees by default to avoid duplicate branch indexes. Index one worktree directly with `codescry index /path/to/worktree`, or include discovered worktrees with `--include-worktrees`.
+
 For large roots, stream progress and resume by rerunning the same command:
 
 ```bash
@@ -18,6 +20,7 @@ For bounded indexing sessions:
 ```bash
 codescry index-root ~/code --jsonl --max-duration 1800
 codescry index-root ~/code --jsonl --limit 5
+codescry index-root ~/code --include-worktrees
 ```
 
 ## Use a custom DB per client
