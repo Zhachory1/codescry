@@ -1,4 +1,6 @@
 import json
+import urllib.error
+from io import BytesIO
 
 import pytest
 
@@ -121,6 +123,20 @@ def test_openai_provider_requires_api_key() -> None:
         OpenAIEmbeddingProvider(api_key="")
 
 
+class OpenAIResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode()
+
+
 def test_openai_embed_batch_maps_empty_and_non_empty_inputs(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     class Response:
         def __enter__(self):  # type: ignore[no-untyped-def]
@@ -152,6 +168,33 @@ def test_openai_embed_batch_maps_empty_and_non_empty_inputs(monkeypatch) -> None
         [0.0, 0.0],
         [0.0, 1.0],
     ]
+
+
+def test_openai_embed_batch_retries_retryable_http_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls = {"count": 0}
+
+    def fake_urlopen(_request, timeout):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.HTTPError(
+                url="https://api.openai.com/v1/embeddings",
+                code=429,
+                msg="rate limited",
+                hdrs={},
+                fp=BytesIO(b"rate limited"),
+            )
+        return OpenAIResponse({"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        max_retries=1,
+        retry_base_seconds=0,
+    )
+
+    assert provider.embed_batch(["alpha"]) == [[1.0, 0.0]]
+    assert calls["count"] == 2
 
 
 def test_truncate_text_respects_non_positive_limit() -> None:
