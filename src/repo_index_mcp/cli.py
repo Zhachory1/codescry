@@ -42,10 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if result.error_count else 0
 
     if args.command == "index-root":
-        engine = RepoIndex(db_path=args.db)
-        results = engine.index_root(args.root_path)
-        print(json.dumps([asdict(result) for result in results], indent=2))
-        return 1 if any(result.error_count for result in results) else 0
+        return handle_index_root(args)
 
     if args.command == "query":
         engine = RepoIndex(db_path=args.db)
@@ -203,6 +200,84 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def handle_index_root(args: argparse.Namespace) -> int:
+    engine = RepoIndex(db_path=args.db)
+    repo_paths = discover_repos(args.root_path)
+    total_discovered = len(repo_paths)
+    if args.limit is not None:
+        repo_paths = repo_paths[: args.limit]
+    total_selected = len(repo_paths)
+    started_at = time.monotonic()
+    results = []
+    stopped_early = False
+
+    for index, repo_path in enumerate(repo_paths, start=1):
+        elapsed = time.monotonic() - started_at
+        if args.max_duration is not None and elapsed >= args.max_duration:
+            stopped_early = True
+            break
+        if args.progress:
+            print(
+                f"[{index}/{total_selected}] indexing {repo_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+        try:
+            result = engine.index_repo(repo_path)
+        except Exception as exc:
+            repo_path_str = str(Path(repo_path).expanduser().resolve())
+            from repo_index_mcp.models import IndexResult
+
+            result = IndexResult(
+                repo_id=repo_path_str,
+                repo_path=repo_path_str,
+                commit_sha="",
+                files_indexed=0,
+                chunks_indexed=0,
+                duration_ms=0,
+                error_count=1,
+                last_error=str(exc),
+            )
+        results.append(result)
+        if args.jsonl:
+            print(json.dumps(asdict(result)), flush=True)
+        if args.progress:
+            print(
+                f"[{index}/{total_selected}] done {repo_path} "
+                f"files_changed={result.files_changed} chunks_indexed={result.chunks_indexed} "
+                f"duration_ms={result.duration_ms} errors={result.error_count}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    summary = {
+        "event": "summary",
+        "root_path": str(Path(args.root_path).expanduser()),
+        "repos_discovered": total_discovered,
+        "repos_selected": total_selected,
+        "repos_indexed": len(results),
+        "stopped_early": stopped_early,
+        "duration_ms": elapsed_ms,
+        "error_count": sum(result.error_count for result in results),
+    }
+    if args.jsonl:
+        print(json.dumps(summary), flush=True)
+    else:
+        print(json.dumps([asdict(result) for result in results], indent=2))
+        show_summary = any(
+            (
+                args.progress,
+                stopped_early,
+                args.limit is not None,
+                args.max_duration is not None,
+            )
+        )
+        if show_summary:
+            print(json.dumps(summary, indent=2), file=sys.stderr)
+    return 1 if any(result.error_count for result in results) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codescry")
     parser.add_argument(
@@ -218,6 +293,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     index_root = subparsers.add_parser("index-root", help="discover and index git repos under root")
     index_root.add_argument("root_path", type=Path)
+    index_root.add_argument(
+        "--progress",
+        action="store_true",
+        help="print per-repo progress to stderr",
+    )
+    index_root.add_argument("--jsonl", action="store_true", help="stream one JSON result per line")
+    index_root.add_argument("--limit", type=positive_int, help="index at most N discovered repos")
+    index_root.add_argument(
+        "--max-duration",
+        type=positive_int,
+        help="stop before starting the next repo after this many seconds",
+    )
 
     query = subparsers.add_parser("query", help="query indexed code")
     query.add_argument("query")

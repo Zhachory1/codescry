@@ -14,6 +14,9 @@ codescry --db /path/to/index.sqlite <command>
 codescry doctor
 codescry index /path/to/repo
 codescry index-root ~/code
+codescry index-root ~/code --progress
+codescry index-root ~/code --jsonl --limit 5
+codescry index-root ~/code --jsonl --max-duration 1800
 codescry query "retry backoff" -k 5
 codescry query "retry backoff" --repo /path/to/repo --path-prefix src/ --language python -k 5
 codescry get-symbol RepoIndex --repo /path/to/repo

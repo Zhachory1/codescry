@@ -7,6 +7,19 @@ codescry index-root ~/code
 codescry status
 ```
 
+For large roots, stream progress and resume by rerunning the same command:
+
+```bash
+codescry index-root ~/code --progress
+```
+
+For bounded indexing sessions:
+
+```bash
+codescry index-root ~/code --jsonl --max-duration 1800
+codescry index-root ~/code --jsonl --limit 5
+```
+
 ## Use a custom DB per client
 
 ```bash

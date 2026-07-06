@@ -27,6 +27,20 @@ If filters are used, remove or check `--repo`, `--path-prefix`, and `--language`
 
 If you changed embedding provider, reindex with the same provider environment used for query/serve. For MCP clients, ensure the server config includes the same `CODESCRY_EMBEDDING_PROVIDER` and model env vars used during indexing.
 
+## `index-root` takes too long
+
+Large roots can take a long time, especially with external embedding providers. Progress is persisted per repo, so rerun the same command to continue through already-current repos quickly.
+
+Use progress or bounded sessions:
+
+```bash
+codescry index-root ~/code --progress
+codescry index-root ~/code --jsonl --max-duration 1800
+codescry index-root ~/code --jsonl --limit 5
+```
+
+`--jsonl` streams one result per line plus a summary line, so caller timeouts do not lose all progress output.
+
 ## Results are stale
 
 ```bash
