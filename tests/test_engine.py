@@ -4,11 +4,12 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from repo_index_mcp.chunking import LineChunker
 from repo_index_mcp.embeddings import HashEmbeddingProvider
 from repo_index_mcp.engine import RepoIndex
 from repo_index_mcp.models import Chunk
 from repo_index_mcp.repo import content_hash, current_commit, repo_id_for
-from repo_index_mcp.secrets import looks_like_secret
+from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
 from repo_index_mcp.storage import SQLiteStorage
 
 
@@ -181,6 +182,61 @@ def test_index_repo_skips_data_artifacts(tmp_path: Path) -> None:
     assert result.files_skipped == 2
     assert result.chunks_total >= 1
     assert {result.path for result in results} == {"app.py"}
+
+
+def test_index_repo_rerun_removes_previously_indexed_artifact_without_commit_change(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    artifact_content = "pretend sqlite text that used to be indexed\n"
+    artifact_path = ".zbrain/index.sqlite"
+    (repo / ".zbrain").mkdir()
+    (repo / artifact_path).write_text(artifact_content, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    repo_id = repo_id_for(repo)
+    provider = HashEmbeddingProvider()
+    storage = SQLiteStorage(db_path)
+    storage.record_repo_success(
+        repo_id=repo_id,
+        repo_path=str(repo),
+        commit_sha=current_commit(repo),
+        remote_url="",
+    )
+    storage.replace_file_chunks(
+        repo_id=repo_id,
+        path=artifact_path,
+        content_hash=content_hash(artifact_content),
+        chunks=[
+            Chunk(
+                repo_id=repo_id,
+                repo_path=str(repo),
+                path=artifact_path,
+                language="text",
+                symbol_name=None,
+                symbol_kind=None,
+                symbol_line=None,
+                symbol_confidence=None,
+                start_line=1,
+                end_line=1,
+                content=artifact_content,
+            )
+        ],
+        embeddings=[provider.embed(artifact_content)],
+        commit_sha=current_commit(repo),
+        embedding_model=provider.model_id,
+        chunker_version=f"{LineChunker().version}:{SECRET_FILTER_VERSION}",
+    )
+
+    result = RepoIndex(db_path=db_path).index_repo(repo)
+    results = RepoIndex(db_path=db_path).query("pretend sqlite", k=5)
+
+    assert result.files_skipped == 0
+    assert result.files_removed == 1
+    assert result.chunks_total == 0
+    assert results == []
 
 
 def test_index_repo_skip_rule_upgrade_removes_existing_artifact(tmp_path: Path) -> None:

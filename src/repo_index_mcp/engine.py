@@ -20,6 +20,7 @@ from repo_index_mcp.repo import (
     remote_url_for,
     repo_id_for,
     resolve_repo_root,
+    should_skip,
 )
 from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
 from repo_index_mcp.storage import SQLiteStorage
@@ -60,6 +61,7 @@ class RepoIndex:
             model_or_chunker_changed = any(
                 state[1:] != (expected_model, chunker_version) for state in stored_state.values()
             )
+            newly_skipped_stored_paths = {path for path in stored_state if should_skip(path)}
             needs_full_scan = not prior_commit or not stored_state or model_or_chunker_changed
             changed_paths: list[str] = []
             if needs_full_scan:
@@ -71,7 +73,11 @@ class RepoIndex:
                 current_hashes = {
                     path: content_hash(file_content) for path, file_content in files
                 }
-                removed_paths = sorted((set(stored_state) - set(current_hashes)) | skipped_paths)
+                removed_paths = sorted(
+                    (set(stored_state) - set(current_hashes))
+                    | skipped_paths
+                    | newly_skipped_stored_paths
+                )
                 files_indexed = len(files)
             else:
                 changed_paths, removed_paths = (
@@ -95,7 +101,10 @@ class RepoIndex:
                     (set(changed_paths) & set(stored_state)) - set(current_hashes)
                 )
                 removed_paths = sorted(
-                    set(removed_paths) | ineligible_changed_paths | skipped_paths
+                    set(removed_paths)
+                    | ineligible_changed_paths
+                    | skipped_paths
+                    | newly_skipped_stored_paths
                 )
                 files_indexed = len(stored_state) - len(removed_paths) + sum(
                     1 for path, _content in files if path not in stored_state
