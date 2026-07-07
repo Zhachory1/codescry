@@ -26,6 +26,16 @@ DEFAULT_EXCLUDES = (
     "**/venv/**",
     ".tox/**",
     "**/.tox/**",
+    ".zbrain/**",
+    "**/.zbrain/**",
+    ".cache/**",
+    "**/.cache/**",
+    ".pytest_cache/**",
+    "**/.pytest_cache/**",
+    ".mypy_cache/**",
+    "**/.mypy_cache/**",
+    ".ruff_cache/**",
+    "**/.ruff_cache/**",
     "dist/**",
     "**/dist/**",
     "build/**",
@@ -41,6 +51,31 @@ DEFAULT_EXCLUDES = (
     "*.pb.gw.go",
     "*_pb2.py",
     "*_pb2_grpc.py",
+    "*.sqlite",
+    "*.sqlite3",
+    "*.db",
+    "*.duckdb",
+    "*-wal",
+    "*-shm",
+    "*.tmp-wal",
+    "*.tmp-shm",
+    "*.parquet",
+    "*.arrow",
+    "*.feather",
+    "*.orc",
+    "*.avro",
+    "*.h5",
+    "*.hdf5",
+    "*.npy",
+    "*.npz",
+    "*.pkl",
+    "*.pickle",
+    "*.bin",
+    "*.dat",
+    "*.csv",
+    "*.tsv",
+    "*.jsonl",
+    "*.ndjson",
     "*.lock",
     "package-lock.json",
     "pnpm-lock.yaml",
@@ -163,12 +198,28 @@ def tracked_files(repo_root: Path) -> list[str]:
 
 
 def committed_files(repo_root: Path, commit_sha: str, max_bytes: int = 1_000_000) -> list[str]:
+    paths, _skipped_paths = committed_files_with_skips(
+        repo_root,
+        commit_sha,
+        max_bytes=max_bytes,
+    )
+    return paths
+
+
+def committed_files_with_skips(
+    repo_root: Path,
+    commit_sha: str,
+    max_bytes: int = 1_000_000,
+) -> tuple[list[str], set[str]]:
     output = _git(repo_root, "ls-tree", "-r", "-z", "-l", commit_sha)
-    return [
-        path
-        for path, size in parse_ls_tree(output)
-        if size <= max_bytes and not should_skip(path)
-    ]
+    paths: list[str] = []
+    skipped: set[str] = set()
+    for path, size in parse_ls_tree(output):
+        if size > max_bytes or should_skip(path):
+            skipped.add(path)
+        else:
+            paths.append(path)
+    return paths, skipped
 
 
 def committed_blob_paths(
@@ -177,9 +228,26 @@ def committed_blob_paths(
     paths: Iterable[str],
     max_bytes: int = 1_000_000,
 ) -> list[str]:
+    blob_paths, _skipped_paths = committed_blob_paths_with_skips(
+        repo_root,
+        commit_sha,
+        paths,
+        max_bytes=max_bytes,
+    )
+    return blob_paths
+
+
+def committed_blob_paths_with_skips(
+    repo_root: Path,
+    commit_sha: str,
+    paths: Iterable[str],
+    max_bytes: int = 1_000_000,
+) -> tuple[list[str], set[str]]:
     result: list[str] = []
+    skipped: set[str] = set()
     for path in paths:
         if should_skip(path):
+            skipped.add(path)
             continue
         object_ref = f"{commit_sha}:{path}"
         if _git(repo_root, "cat-file", "-t", object_ref, check=False).strip() != "blob":
@@ -187,7 +255,9 @@ def committed_blob_paths(
         size_text = _git(repo_root, "cat-file", "-s", object_ref, check=False).strip()
         if size_text and int(size_text) <= max_bytes:
             result.append(path)
-    return result
+        else:
+            skipped.add(path)
+    return result, skipped
 
 
 def changed_paths_between(
@@ -274,6 +344,11 @@ def should_prune_dir(name: str) -> bool:
         ".venv",
         "venv",
         ".tox",
+        ".zbrain",
+        ".cache",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
         "dist",
         "build",
         ".next",
