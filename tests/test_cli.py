@@ -303,6 +303,28 @@ def test_eval_add_appends_jsonl(tmp_path: Path) -> None:
     assert "retry request" in golden.read_text(encoding="utf-8")
 
 
+def test_prune_and_remove_repo_cli(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("def prune_me(): pass\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    assert main(["--db", str(db_path), "index", str(repo)]) == 0
+    capsys.readouterr()
+    assert main(["--db", str(db_path), "remove-repo", str(repo)]) == 0
+    removed_output = json.loads(capsys.readouterr().out)
+    assert removed_output["removed_count"] == 1
+    assert removed_output["removed"]["repo_path"] == str(repo)
+
+    assert main(["--db", str(db_path), "remove-repo", str(repo)]) == 1
+    capsys.readouterr()
+    assert main(["--db", str(db_path), "prune"]) == 0
+    prune_output = json.loads(capsys.readouterr().out)
+    assert prune_output == {"removed": [], "removed_count": 0}
+
+
 def test_index_root_jsonl_streams_results_and_summary(
     tmp_path: Path,
     capsys,  # type: ignore[no-untyped-def]

@@ -27,6 +27,8 @@ codescry backfill-vectors
 # Disable it for comparison/debugging with:
 CODESCRY_DISABLE_CANDIDATE_UNION=1 codescry query "retry backoff" -k 5
 codescry reindex /path/to/repo
+codescry prune
+codescry remove-repo /path/to/repo
 codescry install-hooks /path/to/repo
 codescry install-hooks ~/code --recursive
 codescry eval evals/golden.codescry.jsonl . -k 10 --fail-under 0.85
