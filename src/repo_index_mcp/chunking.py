@@ -126,7 +126,10 @@ class LineChunker:
                 )
                 return dedupe_chunks(chunks)
 
-        parsed_symbols = parse_symbols(language=language, path=path, content=content)
+        try:
+            parsed_symbols = parse_symbols(language=language, path=path, content=content)
+        except Exception:
+            parsed_symbols = []
         if parsed_symbols:
             chunks = self._chunk_line_windows(
                 repo_id=repo_id,
@@ -195,7 +198,7 @@ class LineChunker:
     ) -> list[Chunk]:
         try:
             tree = ast.parse(content)
-        except SyntaxError:
+        except Exception:
             return []
 
         chunks: list[Chunk] = []
