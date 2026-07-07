@@ -25,7 +25,7 @@ codescry index-root ~/code
 
 If filters are used, remove or check `--repo`, `--path-prefix`, and `--language`.
 
-If you changed embedding provider, reindex with the same provider environment used for query/serve. For MCP clients, ensure the server config includes the same `CODESCRY_EMBEDDING_PROVIDER` and model env vars used during indexing.
+If you changed embedding provider, reindex with the same provider environment used for query/serve. The default `auto` provider can switch from hash to Ollama after you install `mxbai-embed-large`; reindex after that switch. For MCP clients, ensure the server config includes the same `CODESCRY_EMBEDDING_PROVIDER` and model env vars used during indexing.
 
 ## `index-root` takes too long
 

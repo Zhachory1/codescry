@@ -10,6 +10,7 @@ from repo_index_mcp.embeddings import (
     OpenAIEmbeddingProvider,
     cosine_similarity,
     embedding_provider_from_env,
+    ollama_model_names,
     tokenize_code,
     truncate_text,
 )
@@ -42,11 +43,36 @@ def test_hash_embedding_batch_matches_single_embeddings() -> None:
     assert provider.embed_batch(texts) == [provider.embed(text) for text in texts]
 
 
-def test_embedding_provider_from_env_defaults_to_hash() -> None:
+def test_embedding_provider_from_env_auto_falls_back_to_hash(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def fail_urlopen(_request, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("offline")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+
     provider = embedding_provider_from_env({})
 
     assert isinstance(provider, HashEmbeddingProvider)
     assert provider.model_id == "hash-v1:dims=256"
+
+
+def test_embedding_provider_from_env_auto_prefers_mxbai(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "repo_index_mcp.embeddings.ollama_model_names",
+        lambda _base_url: {"nomic-embed-text", "mxbai-embed-large"},
+    )
+
+    provider = embedding_provider_from_env({})
+
+    assert isinstance(provider, OllamaEmbeddingProvider)
+    assert provider.model == "mxbai-embed-large"
+    assert provider.max_chars == 500
+
+
+def test_ollama_model_names_strips_tags(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    response = OpenAIResponse({"models": [{"name": "mxbai-embed-large:latest"}]})
+    monkeypatch.setattr("urllib.request.urlopen", lambda _request, timeout: response)
+
+    assert ollama_model_names("http://localhost:11434") == {"mxbai-embed-large"}
 
 
 def test_embedding_provider_from_env_allows_hash_dimensions() -> None:

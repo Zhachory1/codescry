@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from repo_index_mcp import __version__
+from repo_index_mcp.embeddings import HashEmbeddingProvider, embedding_provider_from_env
 from repo_index_mcp.storage import SQLiteStorage
 
 
@@ -25,12 +26,20 @@ def run_doctor(db_path: str | Path) -> tuple[dict[str, Any], int]:
         except Exception as exc:
             checks["db_writable"] = {"ok": False, "detail": str(exc)}
 
+    provider = embedding_provider_from_env()
     result: dict[str, Any] = {
         "ok": all(check["ok"] for check in checks.values()),
         "version": __version__,
         "python": sys.version.split()[0],
         "db_path": str(db),
         "repo_count": repo_count,
+        "embedding_provider": {
+            "selected": provider.model_id,
+            "semantic": not isinstance(provider, HashEmbeddingProvider),
+            "recommendation": None
+            if not isinstance(provider, HashEmbeddingProvider)
+            else "ollama pull mxbai-embed-large",
+        },
         "checks": checks,
     }
     return result, 0 if result["ok"] else 1
