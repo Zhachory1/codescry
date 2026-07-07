@@ -13,7 +13,7 @@ CodeScry is a local codebase retrieval tool for coding agents. It indexes commit
 
 ## Why CodeScry
 
-- Local-first by default: hash embeddings, SQLite storage, no source upload.
+- Local-first by default: auto-selects local Ollama `mxbai-embed-large` when available, otherwise falls back to hash embeddings and SQLite storage.
 - Agent-ready: MCP tools for `search_code`, `get_symbol`, `list_repos`, and `reindex`.
 - Large-index aware: bounded sqlite-vec candidate paths avoid scoring every chunk once vectors are backfilled.
 - Semantic opt-in: Ollama, OpenAI, and sentence-transformers providers are available when quality matters more than default speed.
@@ -191,7 +191,7 @@ See `docs/pilot.md` for activation, timing, miss capture, and decision gates.
 
 ## Retrieval behavior
 
-- Default embeddings are local deterministic hash vectors.
+- Default `auto` embeddings use local Ollama `mxbai-embed-large` when available, otherwise local deterministic hash vectors.
 - Optional embedding providers include Ollama, OpenAI, and sentence-transformers. See `docs/embedding-providers.md`.
 - Changing embedding provider or model requires reindexing because stored vectors are model-specific.
 - Python functions/classes/methods get parser-backed symbol metadata.
@@ -203,8 +203,8 @@ See `docs/pilot.md` for activation, timing, miss capture, and decision gates.
 
 ## Data boundary and safety
 
-- Default embeddings are local deterministic hash vectors.
-- Default configuration does not send source code to external APIs.
+- Default `auto` provider does not use hosted APIs. It uses local Ollama if available, otherwise local hash embeddings.
+- Default configuration does not send source code to hosted external APIs.
 - OpenAI and non-local Ollama embedding endpoints send chunks and queries outside your machine. See `SECURITY.md` and `docs/embedding-providers.md`.
 - Index data is local SQLite derived data and can be deleted/rebuilt.
 - Files matching high-confidence secret patterns are skipped and prior chunks for those paths are removed.
@@ -213,6 +213,6 @@ See `docs/pilot.md` for activation, timing, miss capture, and decision gates.
 ## Current limits
 
 - Python uses stdlib AST parser chunks; TS/JS/Go/Java/Rust/C/C++/SQL use Tree-sitter parser chunks; other languages use regex-backed symbol hints plus line windows.
-- Default embeddings are local deterministic hash vectors; quality-tuned semantic embeddings are available only through opt-in providers.
+- Default `auto` embeddings prefer local semantic Ollama when available and fall back to hash embeddings otherwise; hosted semantic embeddings are opt-in only.
 - SQLite remains the default local store; large-index serving uses bounded sqlite-vec candidate paths where vector coverage exists.
 - Freshness is committed-code freshness; dirty working-tree edits are reported but not indexed.

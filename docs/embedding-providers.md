@@ -1,6 +1,6 @@
 # Embedding providers
 
-CodeScry supports pluggable embedding providers. The default provider is local deterministic hashing and does not send source code or queries anywhere.
+CodeScry supports pluggable embedding providers. The default `auto` provider uses local Ollama `mxbai-embed-large` when that model is available, otherwise it falls back to local deterministic hashing. Hosted providers are never selected automatically.
 
 Changing providers changes the `embedding_model` stored with indexed chunks. Reindex after changing provider:
 
@@ -14,14 +14,31 @@ codescry index-root ~/code
 
 | Provider | Env value | Data leaves machine? | Extra setup |
 | --- | --- | --- | --- |
+| Auto | `auto` | No hosted API | Ollama optional; falls back to hash |
 | Hash | `hash` | No | None |
 | Ollama | `ollama` | No, if Ollama is local | Running Ollama + pulled embedding model |
 | OpenAI | `openai` | Yes | API key |
 | Sentence Transformers | `sentence-transformers` | No | Optional Python dependency + model download |
 
-## Hash provider
+## Auto provider
 
 Default:
+
+```bash
+CODESCRY_EMBEDDING_PROVIDER=auto
+```
+
+Auto selection order:
+
+1. local Ollama `mxbai-embed-large` when installed and Ollama is reachable
+2. local Ollama `nomic-embed-text` when installed and Ollama is reachable
+3. local hash embeddings
+
+Auto uses `CODESCRY_EMBEDDING_MAX_CHARS=500` for `mxbai-embed-large` unless you set an explicit value.
+
+## Hash provider
+
+Force dependency-free hash embeddings:
 
 ```bash
 CODESCRY_EMBEDDING_PROVIDER=hash

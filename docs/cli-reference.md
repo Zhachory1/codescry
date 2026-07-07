@@ -52,7 +52,7 @@ codescry serve
 
 Embedding providers:
 
-- `CODESCRY_EMBEDDING_PROVIDER`: `hash` default, `ollama`, `openai`, or `sentence-transformers`.
+- `CODESCRY_EMBEDDING_PROVIDER`: `auto` default, `hash`, `ollama`, `openai`, or `sentence-transformers`. `auto` uses local Ollama `mxbai-embed-large` when available, otherwise hash.
 - `CODESCRY_HASH_DIMENSIONS`: hash vector dimensions, default `256`.
 - `CODESCRY_OLLAMA_MODEL`: Ollama model, default `nomic-embed-text`.
 - `CODESCRY_OLLAMA_URL`: Ollama URL, default `http://localhost:11434`.

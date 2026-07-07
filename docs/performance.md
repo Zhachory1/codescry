@@ -36,7 +36,8 @@ CODESCRY_CANDIDATE_THRESHOLD=100000 codescry query "retry backoff" -k 10
 
 ## Embedding providers and latency
 
-- `hash` is fastest and default.
+- `auto` is default: local Ollama `mxbai-embed-large` when available, otherwise hash.
+- `hash` is fastest and dependency-free.
 - `ollama` and `sentence-transformers` stay local but add indexing and query latency.
 - `openai` is hosted, sends chunks/queries to the configured endpoint, and uses request batching.
 

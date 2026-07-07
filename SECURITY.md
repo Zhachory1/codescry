@@ -1,6 +1,6 @@
 # Security
 
-`codescry` is local-first. By default it does not send source code or embeddings to external services. Optional embedding providers have different data boundaries: hash and local sentence-transformers stay local; Ollama stays local only when pointed at a local Ollama server; OpenAI sends indexed source chunks and search queries to OpenAI or the configured OpenAI-compatible endpoint.
+`codescry` is local-first. By default it does not use hosted embedding APIs. The default `auto` provider uses local Ollama `mxbai-embed-large` when available, otherwise it falls back to local hash embeddings. Optional embedding providers have different data boundaries: hash and local sentence-transformers stay local; Ollama stays local only when pointed at a local Ollama server; OpenAI sends indexed source chunks and search queries to OpenAI or the configured OpenAI-compatible endpoint.
 
 ## Data boundary
 
@@ -8,6 +8,7 @@
 - Chunks and embeddings are stored in a local SQLite database.
 - MCP runs locally over stdio.
 - No telemetry or hosted embedding API is used by default.
+- The default `auto` provider uses local Ollama when available and local hash otherwise.
 - Hash embeddings are local deterministic vectors.
 - Sentence-transformers runs locally after model download; CodeScry does not upload source code for this provider.
 - Ollama sends chunks and queries to the configured Ollama URL. This stays local only if `CODESCRY_OLLAMA_URL` points to a local server.

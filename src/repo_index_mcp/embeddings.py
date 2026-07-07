@@ -16,6 +16,7 @@ TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+")
 CAMEL_RE = re.compile(r"(?<!^)(?=[A-Z])")
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
+AUTO_OLLAMA_MODELS = ("mxbai-embed-large", "nomic-embed-text")
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 DEFAULT_OPENAI_MAX_RETRIES = 3
@@ -364,7 +365,9 @@ def embedding_provider_from_env(
     environ: Mapping[str, str] | None = None,
 ) -> EmbeddingProvider:
     env = os.environ if environ is None else environ
-    provider = env.get("CODESCRY_EMBEDDING_PROVIDER", "hash").strip().lower()
+    provider = env.get("CODESCRY_EMBEDDING_PROVIDER", "auto").strip().lower()
+    if provider == "auto":
+        return auto_embedding_provider(env)
     if provider == "hash":
         dimensions = int(env.get("CODESCRY_HASH_DIMENSIONS", "256"))
         return HashEmbeddingProvider(dimensions=dimensions)
@@ -395,8 +398,45 @@ def embedding_provider_from_env(
         )
     raise ValueError(
         "unknown CODESCRY_EMBEDDING_PROVIDER "
-        f"{provider!r}; expected hash, ollama, openai, or sentence-transformers"
+        f"{provider!r}; expected auto, hash, ollama, openai, or sentence-transformers"
     )
+
+
+def auto_embedding_provider(env: Mapping[str, str]) -> EmbeddingProvider:
+    base_url = env.get("CODESCRY_OLLAMA_URL", DEFAULT_OLLAMA_URL)
+    models = ollama_model_names(base_url)
+    for model in AUTO_OLLAMA_MODELS:
+        if model in models:
+            max_chars = (
+                int(env["CODESCRY_EMBEDDING_MAX_CHARS"])
+                if "CODESCRY_EMBEDDING_MAX_CHARS" in env
+                else (500 if model == "mxbai-embed-large" else DEFAULT_EXTERNAL_EMBEDDING_MAX_CHARS)
+            )
+            return OllamaEmbeddingProvider(
+                model=model,
+                base_url=base_url,
+                max_chars=max_chars,
+                concurrency=ollama_concurrency(env),
+                batch_size=external_embedding_batch_size(env),
+            )
+    return HashEmbeddingProvider(dimensions=int(env.get("CODESCRY_HASH_DIMENSIONS", "256")))
+
+
+def ollama_model_names(base_url: str, timeout_seconds: float = 0.25) -> set[str]:
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/api/tags", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return set()
+    names: set[str] = set()
+    for item in data.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if isinstance(name, str):
+            names.add(name.split(":", maxsplit=1)[0])
+    return names
 
 
 def external_embedding_max_chars(env: Mapping[str, str]) -> int:
