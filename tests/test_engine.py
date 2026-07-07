@@ -163,6 +163,78 @@ def test_secret_detector_catches_high_confidence_patterns() -> None:
     assert looks_like_secret("token = " + github_token("ghr"))
 
 
+def test_index_repo_skips_data_artifacts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    data_dir = repo / ".zbrain"
+    data_dir.mkdir()
+    (data_dir / "index.sqlite").write_bytes(b"\x00sqlite data")
+    (data_dir / "index.sqlite.tmp-wal").write_bytes(b"\x00wal data")
+    (repo / "app.py").write_text("def searchable_app(): pass\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    result = engine.index_repo(repo)
+    results = engine.query("searchable_app", k=5)
+
+    assert result.files_skipped == 2
+    assert result.chunks_total >= 1
+    assert {result.path for result in results} == {"app.py"}
+
+
+def test_index_repo_skip_rule_upgrade_removes_existing_artifact(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    artifact_content = "pretend sqlite text that used to be indexed\n"
+    artifact_path = ".zbrain/index.sqlite"
+    (repo / ".zbrain").mkdir()
+    (repo / artifact_path).write_text(artifact_content, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    repo_id = repo_id_for(repo)
+    storage = SQLiteStorage(db_path)
+    storage.record_repo_success(
+        repo_id=repo_id,
+        repo_path=str(repo),
+        commit_sha=current_commit(repo),
+        remote_url="",
+    )
+    storage.replace_file_chunks(
+        repo_id=repo_id,
+        path=artifact_path,
+        content_hash=content_hash(artifact_content),
+        chunks=[
+            Chunk(
+                repo_id=repo_id,
+                repo_path=str(repo),
+                path=artifact_path,
+                language="text",
+                symbol_name=None,
+                symbol_kind=None,
+                symbol_line=None,
+                symbol_confidence=None,
+                start_line=1,
+                end_line=1,
+                content=artifact_content,
+            )
+        ],
+        embeddings=[HashEmbeddingProvider().embed(artifact_content)],
+        commit_sha=current_commit(repo),
+        embedding_model=HashEmbeddingProvider().model_id,
+        chunker_version="old-version",
+    )
+
+    result = RepoIndex(db_path=db_path).index_repo(repo)
+    results = RepoIndex(db_path=db_path).query("pretend sqlite", k=5)
+
+    assert result.files_skipped == 1
+    assert result.files_removed == 1
+    assert result.chunks_total == 0
+    assert results == []
+
+
 def test_index_repo_skips_secret_looking_file(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

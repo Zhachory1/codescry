@@ -10,8 +10,8 @@ from repo_index_mcp.embeddings import EmbeddingProvider, embed_batch, embedding_
 from repo_index_mcp.models import IndexResult, SearchResult
 from repo_index_mcp.repo import (
     changed_paths_between,
-    committed_blob_paths,
-    committed_files,
+    committed_blob_paths_with_skips,
+    committed_files_with_skips,
     content_hash,
     current_commit,
     discover_repos,
@@ -63,10 +63,11 @@ class RepoIndex:
             needs_full_scan = not prior_commit or not stored_state or model_or_chunker_changed
             changed_paths: list[str] = []
             if needs_full_scan:
-                paths = committed_files(repo_root, commit_sha)
-                files, skipped_paths = filter_secret_files(
+                paths, artifact_skipped_paths = committed_files_with_skips(repo_root, commit_sha)
+                files, secret_skipped_paths = filter_secret_files(
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
+                skipped_paths = artifact_skipped_paths | secret_skipped_paths
                 current_hashes = {
                     path: content_hash(file_content) for path, file_content in files
                 }
@@ -78,10 +79,15 @@ class RepoIndex:
                     if prior_commit == commit_sha
                     else changed_paths_between(repo_root, prior_commit, commit_sha)
                 )
-                paths = committed_blob_paths(repo_root, commit_sha, changed_paths)
-                files, skipped_paths = filter_secret_files(
+                paths, artifact_skipped_paths = committed_blob_paths_with_skips(
+                    repo_root,
+                    commit_sha,
+                    changed_paths,
+                )
+                files, secret_skipped_paths = filter_secret_files(
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
+                skipped_paths = artifact_skipped_paths | secret_skipped_paths
                 current_hashes = {
                     path: content_hash(file_content) for path, file_content in files
                 }

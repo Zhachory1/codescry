@@ -42,8 +42,13 @@ def test_skip_rules() -> None:
     assert should_skip(".env") is True
     assert should_skip("node_modules/pkg/index.js") is True
     assert should_skip("rokt/rdn/raw/v1/create.pb.go") is True
+    assert should_skip(".zbrain/index.sqlite") is True
+    assert should_skip(".zbrain/index.sqlite.tmp-wal") is True
+    assert should_skip("cache/data.parquet") is True
+    assert should_skip("data/events.jsonl") is True
     assert should_skip("src/app.py") is False
     assert should_prune_dir("node_modules") is True
+    assert should_prune_dir(".zbrain") is True
 
 
 def test_sanitize_remote_url_removes_userinfo() -> None:

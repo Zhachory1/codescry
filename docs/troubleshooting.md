@@ -62,8 +62,10 @@ codescry install-hooks /path/to/repo --force
 
 Existing hooks are not overwritten unless `--force` is used.
 
-## Secret-looking files skipped
+## Secret-looking or generated data files skipped
 
 Index output includes `files_skipped`. Skipped file chunks are not stored, and old chunks for the same path are removed on reindex.
+
+CodeScry skips secret-looking files plus generated data/cache artifacts by default, including SQLite databases, WAL/SHM sidecars, `.zbrain/`, `.cache/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, dataframes, NumPy arrays, pickle files, and large delimited/JSONL data files.
 
 If a secret may have been indexed, see `SECURITY.md` for purge/rebuild steps.
