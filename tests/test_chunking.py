@@ -40,6 +40,37 @@ def test_tree_sitter_parse_failure_falls_back_to_line_chunks(monkeypatch) -> Non
     assert "console.log" in chunks[0].content
 
 
+def test_many_javascript_function_declarations_do_not_crash_parser() -> None:
+    content = "\n".join(f"function f{index}() {{ return {index}; }}" for index in range(280))
+
+    chunks = LineChunker().chunk_file(
+        repo_id="repo",
+        repo_path="/repo",
+        path="app.js",
+        content=content,
+    )
+
+    assert chunks
+    assert any(chunk.symbol_name == "f0" for chunk in chunks)
+    assert any(chunk.symbol_name == "f279" for chunk in chunks)
+
+
+def test_large_cpp_header_like_file_does_not_crash_parser() -> None:
+    content = "\n".join(
+        f"inline int json_helper_{index}() {{ return {index}; }}" for index in range(1200)
+    )
+
+    chunks = LineChunker().chunk_file(
+        repo_id="repo",
+        repo_path="/repo",
+        path="json.hpp",
+        content=content,
+    )
+
+    assert chunks
+    assert "json_helper_0" in chunks[0].content
+
+
 def test_line_chunker_overlaps_lines() -> None:
     chunker = LineChunker(max_lines=3, overlap_lines=1)
     chunks = chunker.chunk_file(
