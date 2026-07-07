@@ -326,6 +326,45 @@ class SQLiteStorage:
             conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
             conn.execute("DELETE FROM indexed_files WHERE repo_id = ?", (repo_id,))
 
+    def remove_repo(self, repo: str) -> dict[str, object] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT r.repo_id, r.repo_path, COUNT(c.chunk_id)
+                FROM repos r
+                LEFT JOIN chunks c ON c.repo_id = r.repo_id
+                WHERE r.repo_id = ? OR r.repo_path = ?
+                GROUP BY r.repo_id, r.repo_path
+                """,
+                (repo, repo),
+            ).fetchone()
+            if row is None:
+                return None
+            repo_id = str(row[0])
+            repo_path = str(row[1])
+            chunk_count = int(row[2])
+            delete_fts_for_repo(conn, repo_id)
+            delete_vectors_for_repo(conn, repo_id)
+            conn.execute("DELETE FROM chunks WHERE repo_id = ?", (repo_id,))
+            conn.execute("DELETE FROM indexed_files WHERE repo_id = ?", (repo_id,))
+            conn.execute("DELETE FROM repos WHERE repo_id = ?", (repo_id,))
+            return {
+                "repo_id": repo_id,
+                "repo_path": repo_path,
+                "chunks_removed": chunk_count,
+            }
+
+    def prune_missing_repos(self) -> list[dict[str, object]]:
+        removed: list[dict[str, object]] = []
+        for repo in self.list_repos():
+            repo_path = str(repo["repo_path"])
+            if Path(repo_path).exists():
+                continue
+            result = self.remove_repo(str(repo["repo_id"]))
+            if result is not None:
+                removed.append(result)
+        return removed
+
     def delete_paths(self, *, repo_id: str, paths: Sequence[str]) -> int:
         if not paths:
             return 0

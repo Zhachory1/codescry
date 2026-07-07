@@ -464,6 +464,48 @@ def test_index_repo_skips_large_committed_blobs(tmp_path: Path) -> None:
     assert result.chunks_total == 0
 
 
+def test_prune_missing_repos_removes_deleted_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def deleted_repo(): pass\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+
+    subprocess.run(["rm", "-rf", str(repo)], check=True)
+    removed = engine.storage.prune_missing_repos()
+
+    assert removed[0]["repo_path"] == str(repo)
+    assert removed[0]["chunks_removed"] >= 1
+    assert engine.list_repos() == []
+    assert engine.query("deleted_repo", k=5) == []
+
+
+def test_remove_repo_removes_one_indexed_repo(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "app.py").write_text("def first_service(): pass\n", encoding="utf-8")
+    (second / "app.py").write_text("def second_service(): pass\n", encoding="utf-8")
+    init_repo(first)
+    init_repo(second)
+    commit_all(first, "init")
+    commit_all(second, "init")
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(first)
+    engine.index_repo(second)
+
+    removed = engine.storage.remove_repo(str(first))
+
+    assert removed is not None
+    assert removed["repo_path"] == str(first)
+    assert {repo["repo_path"] for repo in engine.list_repos()} == {str(second)}
+    assert engine.query("first_service", repo=str(first), k=5) == []
+    assert engine.query("second_service", repo=str(second), k=5)[0].path == "app.py"
+
+
 def test_index_root_continues_past_unborn_repo(tmp_path: Path) -> None:
     good = tmp_path / "good"
     unborn = tmp_path / "unborn"

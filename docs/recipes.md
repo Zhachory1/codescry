@@ -37,6 +37,22 @@ rm ~/.codescry/index.sqlite
 codescry index-root ~/code
 ```
 
+## Remove deleted repos from the index
+
+If you delete a repo from disk, prune its derived index rows:
+
+```bash
+codescry prune
+```
+
+Remove one indexed repo explicitly:
+
+```bash
+codescry remove-repo /path/to/repo
+```
+
+These commands only delete CodeScry index rows, never source files.
+
 ## Fix stale results
 
 ```bash

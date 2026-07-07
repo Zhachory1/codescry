@@ -139,6 +139,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(asdict(result), indent=2))
         return 1 if result.error_count else 0
 
+    if args.command == "prune":
+        engine = RepoIndex(db_path=args.db)
+        removed = engine.storage.prune_missing_repos()
+        print(json.dumps({"removed": removed, "removed_count": len(removed)}, indent=2))
+        return 0
+
+    if args.command == "remove-repo":
+        engine = RepoIndex(db_path=args.db)
+        removed = engine.storage.remove_repo(str(args.repo))
+        print(json.dumps({"removed": removed, "removed_count": int(removed is not None)}, indent=2))
+        return 0 if removed is not None else 1
+
     if args.command == "install-hooks":
         repo_paths = discover_repos(args.path) if args.recursive else [args.path]
         installed = []
@@ -339,6 +351,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     reindex = subparsers.add_parser("reindex", help="reindex repo")
     reindex.add_argument("repo_path", nargs="?", type=Path)
+
+    prune = subparsers.add_parser("prune", help="remove missing repos from the index")
+    prune.set_defaults(_prune=True)
+
+    remove_repo = subparsers.add_parser("remove-repo", help="remove one repo from the index")
+    remove_repo.add_argument("repo")
 
     hooks = subparsers.add_parser("install-hooks", help="install freshness git hooks")
     hooks.add_argument("path", type=Path)
