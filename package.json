@@ -1,6 +1,6 @@
 {
   "name": "codescry",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "npm wrapper for the CodeScry local codebase index CLI and MCP server",
   "license": "MIT",
   "repository": {
