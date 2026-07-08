@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterable
 from dataclasses import replace
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from repo_index_mcp.chunking import LineChunker
 from repo_index_mcp.embeddings import EmbeddingProvider, embed_batch, embedding_provider_from_env
-from repo_index_mcp.models import IndexResult, SearchResult
+from repo_index_mcp.models import Chunk, IndexResult, SearchResult
 from repo_index_mcp.repo import (
     changed_paths_between,
     committed_blob_paths_with_skips,
@@ -27,6 +28,7 @@ from repo_index_mcp.storage import SQLiteStorage
 
 DEFAULT_DB_PATH = Path.home() / ".codescry" / "index.sqlite"
 DEFAULT_INDEX_EMBEDDING_BATCH_CHUNKS = 256
+DEFAULT_MIN_CHUNK_BYTES = 50
 
 
 class RepoIndex:
@@ -40,6 +42,7 @@ class RepoIndex:
         self.storage = SQLiteStorage(db_path)
         self.embedding_provider = embedding_provider or embedding_provider_from_env()
         self.chunker = chunker or LineChunker()
+        self.min_chunk_bytes = min_chunk_bytes_from_env()
 
     def index_repo(self, repo_path: str | Path) -> IndexResult:
         start = time.monotonic()
@@ -48,7 +51,10 @@ class RepoIndex:
         repo_path_str = str(repo_root)
         remote_url = remote_url_for(repo_root)
         expected_model = self.embedding_provider.model_id
-        chunker_version = f"{self.chunker.version}:{SECRET_FILTER_VERSION}"
+        chunker_version = (
+            f"{self.chunker.version}:{SECRET_FILTER_VERSION}:"
+            f"tiny-filter:v1:min_bytes={self.min_chunk_bytes}"
+        )
         commit_sha = ""
         try:
             commit_sha = current_commit(repo_root)
@@ -70,9 +76,7 @@ class RepoIndex:
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
                 skipped_paths = artifact_skipped_paths | secret_skipped_paths
-                current_hashes = {
-                    path: content_hash(file_content) for path, file_content in files
-                }
+                current_hashes = {path: content_hash(file_content) for path, file_content in files}
                 removed_paths = sorted(
                     (set(stored_state) - set(current_hashes))
                     | skipped_paths
@@ -94,11 +98,9 @@ class RepoIndex:
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
                 skipped_paths = artifact_skipped_paths | secret_skipped_paths
-                current_hashes = {
-                    path: content_hash(file_content) for path, file_content in files
-                }
-                ineligible_changed_paths = (
-                    (set(changed_paths) & set(stored_state)) - set(current_hashes)
+                current_hashes = {path: content_hash(file_content) for path, file_content in files}
+                ineligible_changed_paths = (set(changed_paths) & set(stored_state)) - set(
+                    current_hashes
                 )
                 removed_paths = sorted(
                     set(removed_paths)
@@ -106,8 +108,10 @@ class RepoIndex:
                     | skipped_paths
                     | newly_skipped_stored_paths
                 )
-                files_indexed = len(stored_state) - len(removed_paths) + sum(
-                    1 for path, _content in files if path not in stored_state
+                files_indexed = (
+                    len(stored_state)
+                    - len(removed_paths)
+                    + sum(1 for path, _content in files if path not in stored_state)
                 )
         except Exception as exc:
             last_error = f"read committed snapshot: {exc}"
@@ -138,6 +142,7 @@ class RepoIndex:
 
         errors: list[str] = []
         chunks_indexed = 0
+        chunks_skipped = 0
         try:
             self.storage.delete_paths(repo_id=repo_id, paths=removed_paths)
         except Exception as exc:
@@ -210,11 +215,16 @@ class RepoIndex:
             except Exception as exc:
                 errors.append(f"{path}: {exc}")
                 continue
+            chunks, skipped_count = filter_indexable_chunks(
+                chunks,
+                min_chunk_bytes=self.min_chunk_bytes,
+            )
+            chunks_skipped += skipped_count
             if pending and pending_chunk_count + len(chunks) > index_batch_chunks:
                 flush_pending()
             pending.append((path, current_hashes[path], chunks))
             pending_chunk_count += len(chunks)
-            if pending_chunk_count >= index_batch_chunks:
+            if pending_chunk_count >= index_batch_chunks or len(pending) >= index_batch_chunks:
                 flush_pending()
         flush_pending()
 
@@ -246,6 +256,7 @@ class RepoIndex:
             files_changed=len(changed_files),
             files_removed=len(removed_paths),
             files_skipped=len(skipped_paths),
+            chunks_skipped=chunks_skipped,
             chunks_total=self.storage.chunk_count(repo_id=repo_id),
             error_count=len(errors),
             last_error=last_error,
@@ -382,8 +393,7 @@ class RepoIndex:
 
     def embedding_provider_fingerprint(self) -> str:
         return (
-            f"{self.embedding_provider.model_id}:"
-            f"dims={self.embedding_provider.dimensions}:cache-v1"
+            f"{self.embedding_provider.model_id}:dims={self.embedding_provider.dimensions}:cache-v1"
         )
 
     def expected_path_debug(
@@ -412,9 +422,7 @@ class RepoIndex:
         if result is None:
             results = self.query(name, repo=repo, k=1)
             return results[0] if results else None
-        repo_state = {
-            str(item["repo_id"]): item for item in self._repo_status({result.repo})
-        }
+        repo_state = {str(item["repo_id"]): item for item in self._repo_status({result.repo})}
         return replace(
             result,
             is_stale=bool(repo_state.get(result.repo, {}).get("is_stale", True)),
@@ -452,9 +460,46 @@ class RepoIndex:
         return self.index_repo(repo_paths[0])
 
 
-def index_embedding_batch_chunks() -> int:
-    import os
+def filter_indexable_chunks(
+    chunks: list[Chunk],
+    *,
+    min_chunk_bytes: int,
+) -> tuple[list[Chunk], int]:
+    kept: list[Chunk] = []
+    skipped = 0
+    for chunk in chunks:
+        if not chunk.content.strip():
+            skipped += 1
+            continue
+        if (
+            chunk.symbol_line is not None
+            and chunk.start_line <= chunk.symbol_line <= chunk.end_line
+        ):
+            kept.append(chunk)
+            continue
+        if min_chunk_bytes > 0 and len(chunk.content.encode("utf-8")) < min_chunk_bytes:
+            skipped += 1
+            continue
+        kept.append(chunk)
+    return kept, skipped
 
+
+def min_chunk_bytes_from_env() -> int:
+    configured = os.environ.get("CODESCRY_MIN_CHUNK_BYTES", str(DEFAULT_MIN_CHUNK_BYTES))
+    try:
+        value = int(configured)
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid CODESCRY_MIN_CHUNK_BYTES={configured!r}; expected non-negative integer"
+        ) from exc
+    if value < 0:
+        raise ValueError(
+            f"invalid CODESCRY_MIN_CHUNK_BYTES={configured!r}; expected non-negative integer"
+        )
+    return value
+
+
+def index_embedding_batch_chunks() -> int:
     configured = os.environ.get(
         "CODESCRY_INDEX_EMBEDDING_BATCH_CHUNKS",
         str(DEFAULT_INDEX_EMBEDDING_BATCH_CHUNKS),

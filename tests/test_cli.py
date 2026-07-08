@@ -402,7 +402,7 @@ def test_index_root_progress_prints_to_stderr(
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("def service(): pass\n", encoding="utf-8")
+    (repo / "note.txt").write_text("x\n", encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -418,6 +418,7 @@ def test_index_root_progress_prints_to_stderr(
     captured = capsys.readouterr()
     assert "[1/1] indexing" in captured.err
     assert "[1/1] done" in captured.err
+    assert "chunks_skipped=1" in captured.err
 
 
 def test_index_root_max_duration_can_stop_before_indexing(

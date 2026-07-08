@@ -27,6 +27,12 @@ If filters are used, remove or check `--repo`, `--path-prefix`, and `--language`
 
 If you changed embedding provider, reindex with the same provider environment used for query/serve. The default `auto` provider can switch from hash to Ollama after you install `mxbai-embed-large`; reindex after that switch. For MCP clients, ensure the server config includes the same `CODESCRY_EMBEDDING_PROVIDER` and model env vars used during indexing.
 
+Tiny no-symbol chunks under `CODESCRY_MIN_CHUNK_BYTES` are skipped during indexing. If you expect a tiny config/text snippet to be searchable, lower the threshold or disable byte-size filtering and reindex:
+
+```bash
+CODESCRY_MIN_CHUNK_BYTES=0 codescry reindex /path/to/repo
+```
+
 ## `index-root` takes too long
 
 Large roots can take a long time, especially with external embedding providers. Progress is persisted per repo, so rerun the same command to continue through already-current repos quickly.

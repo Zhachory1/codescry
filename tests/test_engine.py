@@ -4,6 +4,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from repo_index_mcp.chunking import LineChunker
 from repo_index_mcp.embeddings import HashEmbeddingProvider
 from repo_index_mcp.engine import RepoIndex
@@ -11,6 +13,9 @@ from repo_index_mcp.models import Chunk
 from repo_index_mcp.repo import content_hash, current_commit, repo_id_for
 from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
 from repo_index_mcp.storage import SQLiteStorage
+
+INDEXABLE_PRINT_ONE = "print('one')\n" + "# padding " + "x" * 60 + "\n"
+INDEXABLE_PRINT_OLD = "print('old')\n" + "# padding " + "x" * 60 + "\n"
 
 
 class CountingEmbeddingProvider:
@@ -76,10 +81,161 @@ def test_index_repo_and_query_returns_code(tmp_path: Path) -> None:
     assert "retry_request" in results[0].snippet
 
 
+def test_index_repo_skips_tiny_no_symbol_chunks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("x\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    result = RepoIndex(db_path=tmp_path / "index.sqlite").index_repo(repo)
+
+    assert result.files_indexed == 1
+    assert result.files_changed == 1
+    assert result.chunks_indexed == 0
+    assert result.chunks_skipped == 1
+    assert result.chunks_total == 0
+
+
+def test_index_repo_keeps_tiny_current_symbol_chunks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def tiny():\n    pass\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    result = engine.index_repo(repo)
+    symbol = engine.get_symbol("tiny")
+
+    assert result.chunks_indexed >= 1
+    assert result.chunks_skipped == 0
+    assert result.chunks_total >= 1
+    assert symbol is not None
+    assert symbol.path == "app.py"
+
+
+def test_index_repo_skips_tiny_prior_symbol_window(tmp_path: Path) -> None:
+    class PriorSymbolWindowChunker:
+        version = "prior-symbol-window-v1"
+
+        def chunk_file(self, **kwargs):  # type: ignore[no-untyped-def]
+            return [
+                Chunk(
+                    repo_id=kwargs["repo_id"],
+                    repo_path=kwargs["repo_path"],
+                    path=kwargs["path"],
+                    language="text",
+                    symbol_name="prior_symbol",
+                    symbol_kind="function",
+                    symbol_line=1,
+                    symbol_confidence="parser",
+                    start_line=4,
+                    end_line=4,
+                    content="x",
+                )
+            ]
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.ts").write_text("function prior_symbol() {}\n\nx\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    result = RepoIndex(
+        db_path=tmp_path / "index.sqlite",
+        chunker=PriorSymbolWindowChunker(),
+    ).index_repo(repo)
+
+    assert result.chunks_indexed == 0
+    assert result.chunks_skipped == 1
+    assert result.chunks_total == 0
+
+
+def test_index_repo_removes_old_chunks_when_file_filters_to_zero(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("searchable old content " * 5, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    first = engine.index_repo(repo)
+    assert first.chunks_total == 1
+
+    (repo / "note.txt").write_text("x\n", encoding="utf-8")
+    commit_all(repo, "tiny")
+    result = engine.index_repo(repo)
+    results = engine.query("searchable old content", k=5)
+
+    assert result.chunks_indexed == 0
+    assert result.chunks_skipped == 1
+    assert result.chunks_total == 0
+    assert results == []
+
+
+def test_index_repo_reindexes_when_min_chunk_bytes_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("x\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    monkeypatch.delenv("CODESCRY_MIN_CHUNK_BYTES", raising=False)
+    db_path = tmp_path / "index.sqlite"
+    first = RepoIndex(db_path=db_path).index_repo(repo)
+    assert first.chunks_total == 0
+
+    monkeypatch.setenv("CODESCRY_MIN_CHUNK_BYTES", "0")
+    result = RepoIndex(db_path=db_path).index_repo(repo)
+
+    with sqlite3.connect(db_path) as conn:
+        chunker_version = conn.execute("SELECT chunker_version FROM indexed_files").fetchone()[0]
+
+    assert result.files_changed == 1
+    assert result.chunks_indexed == 1
+    assert result.chunks_skipped == 0
+    assert result.chunks_total == 1
+    assert "tiny-filter:v1:min_bytes=0" in chunker_version
+
+
+def test_index_repo_skips_whitespace_chunks_when_byte_filter_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("   \n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    monkeypatch.setenv("CODESCRY_MIN_CHUNK_BYTES", "0")
+    result = RepoIndex(db_path=tmp_path / "index.sqlite").index_repo(repo)
+
+    assert result.chunks_indexed == 0
+    assert result.chunks_skipped == 1
+    assert result.chunks_total == 0
+
+
+@pytest.mark.parametrize("value", ["nope", "-1"])
+def test_min_chunk_bytes_env_rejects_invalid_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("CODESCRY_MIN_CHUNK_BYTES", value)
+
+    with pytest.raises(ValueError, match="invalid CODESCRY_MIN_CHUNK_BYTES"):
+        RepoIndex(db_path=tmp_path / "index.sqlite")
+
+
 def test_index_repo_skips_unchanged_files(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -96,7 +252,7 @@ def test_index_repo_skips_unchanged_files(tmp_path: Path) -> None:
 def test_index_repo_reembeds_when_model_changes(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -118,7 +274,7 @@ def test_index_repo_reembeds_when_model_changes(tmp_path: Path) -> None:
 def test_index_repo_reembeds_when_chunker_version_changes(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -134,8 +290,8 @@ def test_index_repo_reembeds_when_chunker_version_changes(tmp_path: Path) -> Non
 def test_index_repo_removes_deleted_file_chunks(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
-    (repo / "old.py").write_text("print('old')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
+    (repo / "old.py").write_text(INDEXABLE_PRINT_OLD, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -233,7 +389,7 @@ def test_index_repo_rerun_removes_previously_indexed_artifact_without_commit_cha
     result = RepoIndex(db_path=db_path).index_repo(repo)
     results = RepoIndex(db_path=db_path).query("pretend sqlite", k=5)
 
-    assert result.files_skipped == 0
+    assert result.files_skipped == 1
     assert result.files_removed == 1
     assert result.chunks_total == 0
     assert results == []
@@ -549,7 +705,7 @@ def test_index_repo_cleans_legacy_repo_id_rows_for_same_path(tmp_path: Path) -> 
     repo = tmp_path / "repo"
     db_path = tmp_path / "index.sqlite"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
     legacy_id = "https://github.com/example/repo.git"
@@ -636,7 +792,7 @@ def test_index_repo_cleans_legacy_repo_id_rows_for_same_path(tmp_path: Path) -> 
 def test_remote_url_in_status_strips_credentials(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     subprocess.run(
         ["git", "remote", "add", "origin", "https://ghp_secret@github.com/acme/repo.git"],
@@ -654,7 +810,7 @@ def test_remote_url_in_status_strips_credentials(tmp_path: Path) -> None:
 def test_scp_like_remote_url_in_status_strips_non_git_user(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     subprocess.run(
         ["git", "remote", "add", "origin", "TOKEN@gitlab.com:group/repo.git"],
@@ -672,7 +828,7 @@ def test_scp_like_remote_url_in_status_strips_non_git_user(tmp_path: Path) -> No
 def test_status_marks_dirty_tracked_files(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -692,7 +848,7 @@ def test_status_marks_dirty_tracked_files(tmp_path: Path) -> None:
 def test_index_repo_failure_keeps_repo_stale(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
@@ -709,7 +865,7 @@ def test_index_repo_failure_keeps_repo_stale(tmp_path: Path) -> None:
 def test_status_marks_repo_stale(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("print('one')\n", encoding="utf-8")
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
     init_repo(repo)
     commit_all(repo, "init")
 
