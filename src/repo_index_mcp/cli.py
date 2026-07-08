@@ -262,6 +262,7 @@ def handle_index_root(args: argparse.Namespace) -> int:
             print(
                 f"[{index}/{total_selected}] done {repo_path} "
                 f"files_changed={result.files_changed} chunks_indexed={result.chunks_indexed} "
+                f"chunks_skipped={result.chunks_skipped} "
                 f"duration_ms={result.duration_ms} errors={result.error_count}",
                 file=sys.stderr,
                 flush=True,

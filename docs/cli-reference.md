@@ -68,6 +68,10 @@ Embedding providers:
 - `CODESCRY_EMBEDDING_MAX_CHARS`: max chars sent per chunk for external providers, default `6000`.
 - `CODESCRY_EMBEDDING_BATCH_SIZE`: OpenAI/sentence-transformers batch size, default `64`.
 
+Indexing:
+
+- `CODESCRY_MIN_CHUNK_BYTES`: skip empty or tiny chunks without an in-range `symbol_line`, default `50`. Set `0` to disable byte-size skipping. Values must be non-negative integers; byte length uses UTF-8 encoded content.
+
 Ranking/debug:
 
 - `CODESCRY_DISABLE_CANDIDATE_UNION=1`: disable candidate union for comparison/debugging.

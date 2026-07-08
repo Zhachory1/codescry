@@ -34,8 +34,9 @@ Returned by `index`, `index-root`, `reindex`.
 - `files_indexed`: committed text files represented by the index.
 - `files_changed`: files re-embedded this run.
 - `files_removed`: files removed from index this run.
-- `files_skipped`: secret-looking files skipped this run.
+- `files_skipped`: secret-looking or generated files skipped this run.
 - `chunks_indexed`: chunks written this run.
+- `chunks_skipped`: empty or tiny chunks skipped this run; this is not a file count or repo-total count. Symbol chunks are preserved.
 - `chunks_total`: chunks stored for repo.
 - `duration_ms`.
 - `error_count`, `last_error`.

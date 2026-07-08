@@ -46,6 +46,7 @@ class IndexResult:
     files_changed: int = 0
     files_removed: int = 0
     files_skipped: int = 0
+    chunks_skipped: int = 0
     chunks_total: int = 0
     error_count: int = 0
     last_error: str | None = None

@@ -34,6 +34,16 @@ Tune candidate-union threshold if testing large-index behavior:
 CODESCRY_CANDIDATE_THRESHOLD=100000 codescry query "retry backoff" -k 10
 ```
 
+## Tiny chunk filtering
+
+Indexing skips empty chunks and chunks smaller than `CODESCRY_MIN_CHUNK_BYTES` when they do not contain the current symbol line. Default: `50` bytes. This reduces low-value one-line rows and vector work while preserving declaration-bearing symbol chunks.
+
+Disable byte-size filtering for comparison or recovery:
+
+```bash
+CODESCRY_MIN_CHUNK_BYTES=0 codescry reindex /path/to/repo
+```
+
 ## Embedding providers and latency
 
 - `auto` is default: local Ollama `mxbai-embed-large` when available, otherwise hash.
