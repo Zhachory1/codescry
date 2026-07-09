@@ -418,6 +418,7 @@ def test_index_root_progress_prints_to_stderr(
     captured = capsys.readouterr()
     assert "[1/1] indexing" in captured.err
     assert "[1/1] done" in captured.err
+    assert "files_ignored=0" in captured.err
     assert "chunks_skipped=1" in captured.err
 
 

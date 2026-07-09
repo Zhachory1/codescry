@@ -287,6 +287,25 @@ def test_index_repo_reembeds_when_chunker_version_changes(tmp_path: Path) -> Non
     assert result.chunks_indexed == 1
 
 
+def test_index_repo_no_codescryignore_keeps_existing_chunker_version(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=db_path)
+    engine.index_repo(repo)
+    result = engine.index_repo(repo)
+    with sqlite3.connect(db_path) as conn:
+        chunker_version = conn.execute("SELECT chunker_version FROM indexed_files").fetchone()[0]
+
+    assert "codescryignore" not in chunker_version
+    assert result.files_changed == 0
+    assert result.chunks_indexed == 0
+
+
 def test_index_repo_removes_deleted_file_chunks(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -338,6 +357,96 @@ def test_index_repo_skips_data_artifacts(tmp_path: Path) -> None:
     assert result.files_skipped == 2
     assert result.chunks_total >= 1
     assert {result.path for result in results} == {"app.py"}
+
+
+def test_index_repo_applies_committed_codescryignore(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".codescryignore").write_text("*.spec.ts\n", encoding="utf-8")
+    (repo / "app.ts").write_text("function searchable_app() { return true; }\n", encoding="utf-8")
+    (repo / "app.spec.ts").write_text("function noisy_spec() { return true; }\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    result = engine.index_repo(repo)
+    searchable_results = engine.query("searchable_app", k=5)
+    ignored_results = engine.query("noisy_spec", k=5)
+
+    assert result.files_ignored == 1
+    assert {result.path for result in searchable_results} == {"app.ts"}
+    assert all(search_result.path != "app.spec.ts" for search_result in ignored_results)
+
+
+def test_index_repo_removes_newly_ignored_chunks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.ts").write_text("function searchable_app() { return true; }\n", encoding="utf-8")
+    (repo / "app.spec.ts").write_text("function noisy_spec() { return true; }\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    first = engine.index_repo(repo)
+    assert first.chunks_total >= 2
+
+    (repo / ".codescryignore").write_text("*.spec.ts\n", encoding="utf-8")
+    commit_all(repo, "ignore specs")
+    result = engine.index_repo(repo)
+    results = engine.query("noisy_spec", k=5)
+
+    assert result.files_ignored == 1
+    assert result.files_removed >= 1
+    assert result.chunks_total < first.chunks_total
+    assert all(search_result.path != "app.spec.ts" for search_result in results)
+
+
+def test_index_repo_new_ignored_file_is_not_counted_removed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".codescryignore").write_text("*.spec.ts\n", encoding="utf-8")
+    (repo / "app.ts").write_text("function searchable_app() { return true; }\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+    (repo / "new.spec.ts").write_text("function new_spec() { return true; }\n", encoding="utf-8")
+    commit_all(repo, "add ignored spec")
+
+    result = engine.index_repo(repo)
+
+    assert result.files_ignored == 1
+    assert result.files_removed == 0
+    assert result.files_indexed == 1
+
+
+def test_index_root_applies_each_repo_codescryignore(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / ".codescryignore").write_text("*.spec.ts\n", encoding="utf-8")
+    (first / "app.spec.ts").write_text("function first_spec() { return true; }\n", encoding="utf-8")
+    (second / "app.spec.ts").write_text(
+        "function second_spec() { return true; }\n", encoding="utf-8"
+    )
+    init_repo(first)
+    init_repo(second)
+    commit_all(first, "init")
+    commit_all(second, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    results = engine.index_root(tmp_path)
+    first_results = engine.query("first_spec", k=5)
+    second_results = engine.query("second_spec", k=5)
+
+    assert len(results) == 2
+    assert [
+        result.files_ignored for result in sorted(results, key=lambda item: item.repo_path)
+    ] == [1, 0]
+    assert all(search_result.repo != str(first) for search_result in first_results)
+    assert {search_result.path for search_result in second_results} == {"app.spec.ts"}
 
 
 def test_index_repo_rerun_removes_previously_indexed_artifact_without_commit_change(

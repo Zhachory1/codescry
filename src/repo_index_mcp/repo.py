@@ -5,10 +5,16 @@ import hashlib
 import os
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import pathspec
+
+CODESCRYIGNORE_PATH = ".codescryignore"
+
 DEFAULT_EXCLUDES = (
+    CODESCRYIGNORE_PATH,
     ".env",
     ".env.*",
     "*.pem",
@@ -258,6 +264,54 @@ def committed_blob_paths_with_skips(
         else:
             skipped.add(path)
     return result, skipped
+
+
+@dataclass(frozen=True)
+class CodescryIgnore:
+    content: str
+    spec: pathspec.PathSpec
+    has_patterns: bool
+
+    @property
+    def fingerprint(self) -> str:
+        return hashlib.sha256(self.content.encode("utf-8")).hexdigest()[:16]
+
+
+def codescryignore_from_text(content: str) -> CodescryIgnore:
+    lines = content.splitlines()
+    return CodescryIgnore(
+        content=content,
+        spec=pathspec.PathSpec.from_lines("gitignore", lines),
+        has_patterns=any(is_codescryignore_pattern(line) for line in lines),
+    )
+
+
+def is_codescryignore_pattern(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped and not stripped.startswith("#"))
+
+
+def load_codescryignore(repo_root: Path, commit_sha: str) -> CodescryIgnore:
+    content = _git(repo_root, "show", f"{commit_sha}:{CODESCRYIGNORE_PATH}", check=False)
+    return codescryignore_from_text(content)
+
+
+def should_ignore_path(path: str, ignore: CodescryIgnore) -> bool:
+    return ignore.spec.match_file(path.replace(os.sep, "/"))
+
+
+def filter_ignored_paths(
+    paths: Iterable[str],
+    ignore: CodescryIgnore,
+) -> tuple[list[str], set[str]]:
+    kept: list[str] = []
+    ignored: set[str] = set()
+    for path in paths:
+        if should_ignore_path(path, ignore):
+            ignored.add(path)
+        else:
+            kept.append(path)
+    return kept, ignored
 
 
 def changed_paths_between(

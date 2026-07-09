@@ -2,10 +2,13 @@ import subprocess
 from pathlib import Path
 
 from repo_index_mcp.repo import (
+    codescryignore_from_text,
     content_hash,
     discover_repos,
     discover_repos_with_skipped,
+    filter_ignored_paths,
     sanitize_remote_url,
+    should_ignore_path,
     should_prune_dir,
     should_skip,
 )
@@ -49,6 +52,36 @@ def test_skip_rules() -> None:
     assert should_skip("src/app.py") is False
     assert should_prune_dir("node_modules") is True
     assert should_prune_dir(".zbrain") is True
+
+
+def test_codescryignore_gitwildmatch_patterns() -> None:
+    ignore = codescryignore_from_text(
+        """
+# specs anywhere
+*.spec.ts
+
+# generated directory
+libs/api/**
+fixtures/
+
+# keep one generated type
+!libs/api/keep.spec.ts
+"""
+    )
+
+    assert should_ignore_path("apps/app/src/foo.spec.ts", ignore) is True
+    assert should_ignore_path("libs/api/client.ts", ignore) is True
+    assert should_ignore_path("apps/app/fixtures/data.json", ignore) is True
+    assert should_ignore_path("libs/api/keep.spec.ts", ignore) is False
+    assert should_ignore_path("apps/app/src/foo.ts", ignore) is False
+
+    kept, ignored = filter_ignored_paths(
+        ["apps/app/src/foo.ts", "apps/app/src/foo.spec.ts", "libs/api/client.ts"],
+        ignore,
+    )
+
+    assert kept == ["apps/app/src/foo.ts"]
+    assert ignored == {"apps/app/src/foo.spec.ts", "libs/api/client.ts"}
 
 
 def test_sanitize_remote_url_removes_userinfo() -> None:

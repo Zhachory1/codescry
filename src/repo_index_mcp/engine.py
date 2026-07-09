@@ -16,11 +16,14 @@ from repo_index_mcp.repo import (
     content_hash,
     current_commit,
     discover_repos,
+    filter_ignored_paths,
     has_dirty_tracked_files,
     iter_committed_text_files,
+    load_codescryignore,
     remote_url_for,
     repo_id_for,
     resolve_repo_root,
+    should_ignore_path,
     should_skip,
 )
 from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
@@ -51,13 +54,20 @@ class RepoIndex:
         repo_path_str = str(repo_root)
         remote_url = remote_url_for(repo_root)
         expected_model = self.embedding_provider.model_id
-        chunker_version = (
-            f"{self.chunker.version}:{SECRET_FILTER_VERSION}:"
-            f"tiny-filter:v1:min_bytes={self.min_chunk_bytes}"
-        )
+        chunker_version = ""
         commit_sha = ""
         try:
             commit_sha = current_commit(repo_root)
+            codescry_ignore = load_codescryignore(repo_root, commit_sha)
+            ignore_version = (
+                f":codescryignore:v1={codescry_ignore.fingerprint}"
+                if codescry_ignore.has_patterns
+                else ""
+            )
+            chunker_version = (
+                f"{self.chunker.version}:{SECRET_FILTER_VERSION}:"
+                f"tiny-filter:v1:min_bytes={self.min_chunk_bytes}{ignore_version}"
+            )
             self.storage.cleanup_repo_path_aliases(repo_id=repo_id, repo_path=repo_path_str)
             stored_state = self.storage.indexed_file_state(repo_id=repo_id)
             prior_commit = self.storage.repo_commit(repo_id=repo_id)
@@ -68,19 +78,26 @@ class RepoIndex:
                 state[1:] != (expected_model, chunker_version) for state in stored_state.values()
             )
             newly_skipped_stored_paths = {path for path in stored_state if should_skip(path)}
+            newly_ignored_stored_paths = {
+                path for path in stored_state if should_ignore_path(path, codescry_ignore)
+            }
+            files_ignored = 0
             needs_full_scan = not prior_commit or not stored_state or model_or_chunker_changed
             changed_paths: list[str] = []
             if needs_full_scan:
                 paths, artifact_skipped_paths = committed_files_with_skips(repo_root, commit_sha)
+                paths, ignored_paths = filter_ignored_paths(paths, codescry_ignore)
                 files, secret_skipped_paths = filter_secret_files(
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
                 skipped_paths = artifact_skipped_paths | secret_skipped_paths
+                files_ignored = len(ignored_paths | newly_ignored_stored_paths)
                 current_hashes = {path: content_hash(file_content) for path, file_content in files}
                 removed_paths = sorted(
                     (set(stored_state) - set(current_hashes))
                     | skipped_paths
                     | newly_skipped_stored_paths
+                    | newly_ignored_stored_paths
                 )
                 files_indexed = len(files)
             else:
@@ -94,10 +111,12 @@ class RepoIndex:
                     commit_sha,
                     changed_paths,
                 )
+                paths, ignored_paths = filter_ignored_paths(paths, codescry_ignore)
                 files, secret_skipped_paths = filter_secret_files(
                     iter_committed_text_files(repo_root, commit_sha, paths)
                 )
                 skipped_paths = artifact_skipped_paths | secret_skipped_paths
+                files_ignored = len(ignored_paths | newly_ignored_stored_paths)
                 current_hashes = {path: content_hash(file_content) for path, file_content in files}
                 ineligible_changed_paths = (set(changed_paths) & set(stored_state)) - set(
                     current_hashes
@@ -107,6 +126,7 @@ class RepoIndex:
                     | ineligible_changed_paths
                     | skipped_paths
                     | newly_skipped_stored_paths
+                    | newly_ignored_stored_paths
                 )
                 files_indexed = (
                     len(stored_state)
@@ -256,6 +276,7 @@ class RepoIndex:
             files_changed=len(changed_files),
             files_removed=len(removed_paths),
             files_skipped=len(skipped_paths),
+            files_ignored=files_ignored,
             chunks_skipped=chunks_skipped,
             chunks_total=self.storage.chunk_count(repo_id=repo_id),
             error_count=len(errors),

@@ -50,6 +50,10 @@ codescry serve
 - `--path-prefix`: repo-relative path prefix.
 - `--language`: detected language such as `python`, `typescript`, `go`, `markdown`.
 
+## Repo-local ignores
+
+Add `.codescryignore` at a repo root to skip noisy committed paths before chunking and embedding. Patterns use gitignore syntax through gitwildmatch. Reindex after committing ignore changes; newly ignored chunks are removed.
+
 ## Environment variables
 
 Embedding providers:

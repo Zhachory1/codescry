@@ -23,6 +23,32 @@ codescry index-root ~/code --jsonl --limit 5
 codescry index-root ~/code --include-worktrees
 ```
 
+## Ignore repo-local noise
+
+Add `.codescryignore` at the repo root to skip specs, generated clients, or bulky fixtures for that repo only:
+
+```gitignore
+# Tests/specs
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.ts
+**/*.test.tsx
+
+# Generated API clients / fixtures
+libs/api-interfaces/src/api/**
+libs/api-interfaces/src/types/**
+libs/e2e-shared/src/fixtures/auto-generated/**
+libs/op2-campaigns/api/*.json
+```
+
+Commit the file, then reindex:
+
+```bash
+codescry reindex /path/to/repo
+```
+
+Index output reports `files_ignored`; old chunks for newly ignored paths are removed.
+
 ## Use a custom DB per client
 
 ```bash
