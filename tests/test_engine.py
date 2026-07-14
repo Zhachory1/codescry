@@ -9,6 +9,7 @@ import pytest
 from repo_index_mcp.chunking import LineChunker
 from repo_index_mcp.embeddings import HashEmbeddingProvider
 from repo_index_mcp.engine import RepoIndex
+from repo_index_mcp.hooks import install_hooks
 from repo_index_mcp.models import Chunk
 from repo_index_mcp.repo import content_hash, current_commit, repo_id_for
 from repo_index_mcp.secrets import SECRET_FILTER_VERSION, looks_like_secret
@@ -986,6 +987,24 @@ def test_status_marks_repo_stale(tmp_path: Path) -> None:
     repos = engine.list_repos()
 
     assert repos[0]["is_stale"] is True
+
+
+def test_status_reports_freshness_hook_coverage(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(INDEXABLE_PRINT_ONE, encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+
+    engine = RepoIndex(db_path=tmp_path / "index.sqlite")
+    engine.index_repo(repo)
+    missing_status = engine.list_repos()[0]
+    install_hooks(repo, command="codescry-test")
+    installed_status = engine.list_repos()[0]
+
+    assert missing_status["freshness_hooks"]["installed"] is False
+    assert missing_status["freshness_hooks"]["missing"] == ["post-commit", "post-merge"]
+    assert installed_status["freshness_hooks"]["installed"] is True
 
 
 class VersionedChunker:

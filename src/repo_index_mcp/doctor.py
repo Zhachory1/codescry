@@ -9,6 +9,7 @@ from typing import Any
 
 from repo_index_mcp import __version__
 from repo_index_mcp.embeddings import HashEmbeddingProvider, embedding_provider_from_env
+from repo_index_mcp.hooks import inspect_hooks, summarize_hook_status
 from repo_index_mcp.storage import SQLiteStorage
 
 
@@ -19,10 +20,23 @@ def run_doctor(db_path: str | Path) -> tuple[dict[str, Any], int]:
         "db_writable": check_db_writable(db),
         "mcp_dependency": check_importable("mcp"),
     }
+    repos: list[dict[str, object]] = []
     repo_count = None
     if checks["db_writable"]["ok"]:
         try:
-            repo_count = len(SQLiteStorage(db).list_repos())
+            repos = SQLiteStorage(db).list_repos()
+            repo_count = len(repos)
+            for repo in repos:
+                try:
+                    repo["freshness_hooks"] = inspect_hooks(str(repo["repo_path"]))
+                except Exception as exc:
+                    repo["freshness_hooks"] = {
+                        "installed": False,
+                        "missing": [],
+                        "non_codescry": [],
+                        "non_executable": [],
+                        "error": str(exc),
+                    }
         except Exception as exc:
             checks["db_writable"] = {"ok": False, "detail": str(exc)}
 
@@ -33,6 +47,7 @@ def run_doctor(db_path: str | Path) -> tuple[dict[str, Any], int]:
         "python": sys.version.split()[0],
         "db_path": str(db),
         "repo_count": repo_count,
+        "freshness_hooks": summarize_hook_status(repos),
         "embedding_provider": {
             "selected": provider.model_id,
             "semantic": not isinstance(provider, HashEmbeddingProvider),

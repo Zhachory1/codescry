@@ -56,7 +56,7 @@ codescry status
 codescry reindex /path/to/repo
 ```
 
-Freshness is committed-code freshness. Dirty tracked files are reported but not indexed.
+Freshness is committed-code freshness. Dirty tracked files are reported but not indexed. A running `codescry serve` MCP server does not watch files; use explicit reindexing or install hooks for automatic updates after commits/merges.
 
 ## Hooks not firing
 

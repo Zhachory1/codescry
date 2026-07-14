@@ -7,6 +7,7 @@ import pytest
 
 from repo_index_mcp.cli import main, positive_int
 from repo_index_mcp.doctor import run_doctor
+from repo_index_mcp.hooks import install_hooks
 
 
 def test_positive_int() -> None:
@@ -30,6 +31,39 @@ def test_doctor_returns_healthy_json(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result["checks"]["git"]["ok"] is True
     assert result["checks"]["db_writable"]["ok"] is True
     assert result["checks"]["mcp_dependency"]["ok"] is True
+    assert result["freshness_hooks"] == {
+        "repos_checked": 0,
+        "installed": 0,
+        "missing": 0,
+        "missing_repos": [],
+    }
+
+
+def test_doctor_summarizes_repo_hook_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODESCRY_USAGE_LOG", str(tmp_path / "usage.jsonl"))
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('ok')\n# padding " + "x" * 60 + "\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    assert main(["--db", str(db_path), "index", str(repo)]) == 0
+
+    missing_result, _ = run_doctor(db_path)
+    install_hooks(repo, command="codescry-test")
+    installed_result, _ = run_doctor(db_path)
+
+    assert missing_result["freshness_hooks"]["repos_checked"] == 1
+    assert missing_result["freshness_hooks"]["missing"] == 1
+    assert missing_result["freshness_hooks"]["missing_repos"][0]["missing"] == [
+        "post-commit",
+        "post-merge",
+    ]
+    assert installed_result["freshness_hooks"]["installed"] == 1
+    assert installed_result["freshness_hooks"]["missing"] == 0
 
 
 def test_doctor_returns_nonzero_for_unwritable_db_path(tmp_path: Path) -> None:

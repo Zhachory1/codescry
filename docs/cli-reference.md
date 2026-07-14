@@ -22,6 +22,7 @@ codescry query "retry backoff" -k 5
 codescry query "retry backoff" --repo /path/to/repo --path-prefix src/ --language python -k 5
 codescry get-symbol RepoIndex --repo /path/to/repo
 codescry status
+# status includes committed-code freshness and post-commit/post-merge hook coverage.
 codescry backfill-vectors
 # Candidate union is used automatically after vector coverage is complete.
 # Disable it for comparison/debugging with:
