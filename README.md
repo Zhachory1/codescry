@@ -152,6 +152,15 @@ codescry --db <db> reindex "$PWD"
 
 They preserve the selected DB path and must not fail git commands.
 
+If hooks are not practical, run an opt-in committed-state watcher:
+
+```bash
+codescry watch ~/code/my-repo
+codescry watch --once --jsonl
+```
+
+The watcher polls git `HEAD` for indexed repos or a specified repo, then reindexes committed snapshots only when the commit changes.
+
 ## Docs
 
 - `docs/getting-started.md` — install to first useful query.

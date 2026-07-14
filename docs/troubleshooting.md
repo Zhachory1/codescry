@@ -56,7 +56,7 @@ codescry status
 codescry reindex /path/to/repo
 ```
 
-Freshness is committed-code freshness. Dirty tracked files are reported but not indexed.
+Freshness is committed-code freshness. Dirty tracked files are reported but not indexed. `codescry watch [repo_path]` can keep committed snapshots fresh by polling git `HEAD`; it does not index dirty working-tree content.
 
 ## Hooks not firing
 
