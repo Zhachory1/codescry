@@ -2,7 +2,7 @@
 
 ## Search result
 
-Returned by CLI `query`, CLI `get-symbol`, MCP `search_code`, and symbol fallback.
+Returned by CLI `query`, CLI `get-symbol`, MCP `search_code`, HTTP `POST /search`, and symbol fallback.
 
 - `repo`: repo id/path.
 - `path`: repo-relative path.
@@ -14,9 +14,9 @@ Returned by CLI `query`, CLI `get-symbol`, MCP `search_code`, and symbol fallbac
 - `is_stale`: indexed commit differs from repo `HEAD` or repo has index errors.
 - `has_dirty_tracked_files`: repo has uncommitted tracked changes; dirty content is not indexed.
 
-## MCP `get_symbol` result
+## MCP/HTTP symbol result
 
-MCP `get_symbol` keeps the original MCP contract and uses `definition` instead of `snippet`:
+MCP `get_symbol` and HTTP `POST /symbol` keep the original MCP contract and use `definition` instead of `snippet`:
 
 - `repo`, `path`, `start_line`, `end_line`.
 - `definition`: snippet text for the matched symbol.
@@ -28,7 +28,7 @@ CLI `codescry get-symbol` returns the normal search-result shape with `snippet`.
 
 ## Index result
 
-Returned by `index`, `index-root`, `reindex`.
+Returned by `index`, `index-root`, `reindex`, and HTTP `POST /reindex`.
 
 - `repo_id`, `repo_path`, `commit_sha`.
 - `files_indexed`: committed text files represented by the index.

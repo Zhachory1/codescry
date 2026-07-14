@@ -103,6 +103,14 @@ Run the MCP server over stdio:
 codescry serve
 ```
 
+Run the localhost HTTP API for dashboards, browser tools, or non-MCP agents:
+
+```bash
+codescry serve-http --host 127.0.0.1 --port 8765
+```
+
+Available endpoints: `GET /health`, `GET /repos`, `POST /search`, `POST /symbol`, and `POST /reindex`. The HTTP MVP has no auth and binds to localhost by default.
+
 Agent config example:
 
 ```json

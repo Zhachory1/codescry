@@ -42,7 +42,20 @@ codescry pilot miss --scrubbed-query "retry backoff" --expected-path src/retry.p
 codescry pilot report
 codescry pilot report --usage-log ada.usage.jsonl --usage-log grace.usage.jsonl
 codescry serve
+codescry serve-http --host 127.0.0.1 --port 8765
 ```
+
+## HTTP API
+
+`codescry serve-http` starts a stdlib HTTP server. It binds to `127.0.0.1:8765` by default and has no auth for the localhost-only MVP.
+
+Endpoints:
+
+- `GET /health` returns `{ "ok": true }`.
+- `GET /repos` returns the same repo list as `codescry status`.
+- `POST /search` accepts `query`, optional `repo`, `path_prefix`, `language`, and `k`.
+- `POST /symbol` accepts `name` and optional `repo`.
+- `POST /reindex` accepts optional `repo_path`.
 
 ## Filters
 
