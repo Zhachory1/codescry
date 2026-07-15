@@ -28,6 +28,8 @@ codescry backfill-vectors
 # Disable it for comparison/debugging with:
 CODESCRY_DISABLE_CANDIDATE_UNION=1 codescry query "retry backoff" -k 5
 codescry reindex /path/to/repo
+codescry watch /path/to/repo
+codescry watch --once --jsonl
 codescry prune
 codescry remove-repo /path/to/repo
 codescry install-hooks /path/to/repo
@@ -50,6 +52,10 @@ codescry serve
 - `--repo`: accepts `repo_id` or `repo_path` from `codescry status`.
 - `--path-prefix`: repo-relative path prefix.
 - `--language`: detected language such as `python`, `typescript`, `go`, `markdown`.
+
+## Freshness watcher
+
+`codescry watch [repo_path]` polls git `HEAD` and reindexes committed snapshots only when the commit changes. Without `repo_path`, it watches repos already present in the index. Use `--once` for a single poll, `--interval 10` to change the poll interval, `--jsonl` for event streams, and `--progress` to include unchanged events.
 
 ## Repo-local ignores
 

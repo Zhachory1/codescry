@@ -17,7 +17,13 @@ from repo_index_mcp.eval import (
     run_recall_eval,
 )
 from repo_index_mcp.hooks import install_hooks
-from repo_index_mcp.repo import discover_repos, discover_repos_with_skipped
+from repo_index_mcp.repo import (
+    current_commit,
+    discover_repos,
+    discover_repos_with_skipped,
+    repo_id_for,
+    resolve_repo_root,
+)
 from repo_index_mcp.secrets import looks_like_secret
 from repo_index_mcp.storage import rrf_ranking_enabled
 from repo_index_mcp.usage import (
@@ -139,6 +145,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(asdict(result), indent=2))
         return 1 if result.error_count else 0
 
+    if args.command == "watch":
+        return handle_watch(args)
+
     if args.command == "prune":
         engine = RepoIndex(db_path=args.db)
         removed = engine.storage.prune_missing_repos()
@@ -210,6 +219,52 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 1
+
+
+def handle_watch(args: argparse.Namespace) -> int:
+    engine = RepoIndex(db_path=args.db)
+    repo_paths = [args.repo_path] if args.repo_path is not None else engine.storage.repo_paths()
+    if not repo_paths:
+        print(
+            "No repos indexed. Run `codescry index /path/to/repo` first or pass a repo path.",
+            file=sys.stderr,
+        )
+        return 1
+
+    while True:
+        error_count = 0
+        for repo_path in repo_paths:
+            event = watch_repo_once(engine, repo_path)
+            error_count += int(event["event"] == "error")
+            if args.jsonl:
+                if args.progress or args.once or event["event"] != "unchanged":
+                    print(json.dumps(event), flush=True)
+            elif args.progress or args.once or event["event"] != "unchanged":
+                print(json.dumps(event, indent=2), flush=True)
+        if args.once:
+            return 1 if error_count else 0
+        time.sleep(args.interval)
+
+
+def watch_repo_once(engine: RepoIndex, repo_path: str | Path) -> dict[str, object]:
+    repo_path_str = str(Path(repo_path).expanduser())
+    try:
+        repo_root = resolve_repo_root(repo_path)
+        repo_id = repo_id_for(repo_root)
+        commit_sha = current_commit(repo_root)
+        stored_commit = engine.storage.repo_commit(repo_id=repo_id)
+        repo_rows = engine.storage.repos_by_id({repo_id})
+        has_previous_error = bool(repo_rows and int(repo_rows[0]["error_count"] or 0) > 0)
+        if stored_commit == commit_sha and not has_previous_error:
+            return {
+                "event": "unchanged",
+                "repo_path": str(repo_root),
+                "commit_sha": commit_sha,
+            }
+        result = engine.index_repo(repo_root)
+        return {"event": "indexed", **asdict(result)}
+    except Exception as exc:
+        return {"event": "error", "repo_path": repo_path_str, "last_error": str(exc)}
 
 
 def handle_index_root(args: argparse.Namespace) -> int:
@@ -352,6 +407,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     reindex = subparsers.add_parser("reindex", help="reindex repo")
     reindex.add_argument("repo_path", nargs="?", type=Path)
+
+    watch = subparsers.add_parser("watch", help="watch committed repo freshness")
+    watch.add_argument("repo_path", nargs="?", type=Path)
+    watch.add_argument("--interval", type=positive_float, default=5.0)
+    watch.add_argument("--once", action="store_true", help="poll once and exit")
+    watch.add_argument("--jsonl", action="store_true", help="stream one JSON event per line")
+    watch.add_argument("--progress", action="store_true", help="include unchanged events")
 
     prune = subparsers.add_parser("prune", help="remove missing repos from the index")
     prune.set_defaults(_prune=True)
@@ -570,6 +632,13 @@ def parse_optional_bool(value: str | None) -> bool | None:
 
 def positive_int(value: str) -> int:
     parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be positive")
     return parsed
