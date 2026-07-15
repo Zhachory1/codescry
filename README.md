@@ -89,7 +89,7 @@ Discover and index every git repo under a root:
 codescry index-root ~/code
 ```
 
-Show indexed repos and freshness:
+Show indexed repos, stale/dirty state, and CodeScry hook coverage:
 
 ```bash
 codescry status
@@ -102,6 +102,8 @@ Run the MCP server over stdio:
 ```bash
 codescry serve
 ```
+
+The MCP server answers queries only. It is not a file watcher; keep committed-code freshness by running `codescry reindex` or installing git hooks.
 
 Agent config example:
 
