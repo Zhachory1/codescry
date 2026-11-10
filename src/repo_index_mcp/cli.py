@@ -35,6 +35,7 @@ from repo_index_mcp.usage import (
     record_retention,
     start_task,
 )
+from repo_index_mcp.validation import coerce_positive_int
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -215,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
         from repo_index_mcp.mcp_server import run_server
 
         run_server(db_path=args.db)
+        return 0
+
+    if args.command == "serve-http":
+        from repo_index_mcp.http_server import run_http_server
+
+        run_http_server(db_path=args.db, host=args.host, port=args.port)
         return 0
 
     parser.print_help()
@@ -450,6 +457,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="run MCP server over stdio")
     serve.set_defaults(_serve=True)
 
+    serve_http = subparsers.add_parser("serve-http", help="run local HTTP API server")
+    serve_http.add_argument("--host", default="127.0.0.1")
+    serve_http.add_argument("--port", type=positive_int, default=8765)
+
     return parser
 
 
@@ -631,10 +642,10 @@ def parse_optional_bool(value: str | None) -> bool | None:
 
 
 def positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return parsed
+    try:
+        return coerce_positive_int(value, name="value")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be positive") from exc
 
 
 def positive_float(value: str) -> float:
