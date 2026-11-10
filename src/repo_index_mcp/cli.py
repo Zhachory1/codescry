@@ -35,6 +35,7 @@ from repo_index_mcp.usage import (
     record_retention,
     start_task,
 )
+from repo_index_mcp.validation import coerce_positive_int
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -641,10 +642,10 @@ def parse_optional_bool(value: str | None) -> bool | None:
 
 
 def positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return parsed
+    try:
+        return coerce_positive_int(value, name="value")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be positive") from exc
 
 
 def positive_float(value: str) -> float:

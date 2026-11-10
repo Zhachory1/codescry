@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from repo_index_mcp.engine import DEFAULT_DB_PATH, RepoIndex
 from repo_index_mcp.models import SearchResult
 from repo_index_mcp.usage import log_search_event
+from repo_index_mcp.validation import coerce_positive_int
 
 
 def run_http_server(
@@ -89,7 +90,7 @@ def handle_search(engine: RepoIndex, payload: dict[str, Any]) -> list[dict[str, 
     repo = optional_string(payload, "repo")
     path_prefix = optional_string(payload, "path_prefix")
     language = optional_string(payload, "language")
-    k = positive_int(payload.get("k", 10), "k")
+    k = coerce_positive_int(payload.get("k", 10), name="k")
     start = time.monotonic()
     results = engine.query(
         query,
@@ -160,15 +161,3 @@ def optional_string(payload: dict[str, Any], name: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string")
     return value
-
-
-def positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be a positive integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a positive integer") from exc
-    if parsed <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return parsed
