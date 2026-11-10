@@ -5,12 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from repo_index_mcp.cli import main, positive_int
+from repo_index_mcp.cli import main, positive_float, positive_int
 from repo_index_mcp.doctor import run_doctor
+from repo_index_mcp.hooks import install_hooks
 
 
 def test_positive_int() -> None:
     assert positive_int("3") == 3
+
+
+def test_positive_float() -> None:
+    assert positive_float("0.5") == 0.5
 
 
 def test_doctor_returns_healthy_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,6 +35,39 @@ def test_doctor_returns_healthy_json(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result["checks"]["git"]["ok"] is True
     assert result["checks"]["db_writable"]["ok"] is True
     assert result["checks"]["mcp_dependency"]["ok"] is True
+    assert result["freshness_hooks"] == {
+        "repos_checked": 0,
+        "installed": 0,
+        "missing": 0,
+        "missing_repos": [],
+    }
+
+
+def test_doctor_summarizes_repo_hook_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODESCRY_USAGE_LOG", str(tmp_path / "usage.jsonl"))
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('ok')\n# padding " + "x" * 60 + "\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    assert main(["--db", str(db_path), "index", str(repo)]) == 0
+
+    missing_result, _ = run_doctor(db_path)
+    install_hooks(repo, command="codescry-test")
+    installed_result, _ = run_doctor(db_path)
+
+    assert missing_result["freshness_hooks"]["repos_checked"] == 1
+    assert missing_result["freshness_hooks"]["missing"] == 1
+    assert missing_result["freshness_hooks"]["missing_repos"][0]["missing"] == [
+        "post-commit",
+        "post-merge",
+    ]
+    assert installed_result["freshness_hooks"]["installed"] == 1
+    assert installed_result["freshness_hooks"]["missing"] == 0
 
 
 def test_doctor_returns_nonzero_for_unwritable_db_path(tmp_path: Path) -> None:
@@ -449,6 +487,57 @@ def test_index_root_max_duration_can_stop_before_indexing(
     assert lines[-1]["event"] == "summary"
     assert lines[-1]["stopped_early"] is True
     assert lines[-1]["repos_indexed"] == 0
+
+
+def test_watch_once_reports_unchanged_repo(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODESCRY_USAGE_LOG", str(tmp_path / "usage.jsonl"))
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n# padding " + "x" * 60 + "\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    assert main(["--db", str(db_path), "index", str(repo)]) == 0
+    capsys.readouterr()
+
+    assert main(["--db", str(db_path), "watch", str(repo), "--once"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["event"] == "unchanged"
+    assert output["repo_path"] == str(repo.resolve())
+
+
+def test_watch_once_indexes_new_commit_from_indexed_repos(
+    tmp_path: Path,
+    capsys,  # type: ignore[no-untyped-def]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODESCRY_USAGE_LOG", str(tmp_path / "usage.jsonl"))
+    repo = tmp_path / "repo"
+    db_path = tmp_path / "index.sqlite"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('one')\n# padding " + "x" * 60 + "\n", encoding="utf-8")
+    init_repo(repo)
+    commit_all(repo, "init")
+    assert main(["--db", str(db_path), "index", str(repo)]) == 0
+    (repo / "app.py").write_text(
+        "def new_symbol():\n    return True\n# padding " + "x" * 60 + "\n",
+        encoding="utf-8",
+    )
+    commit_all(repo, "add symbol")
+    capsys.readouterr()
+
+    assert main(["--db", str(db_path), "watch", "--once", "--jsonl"]) == 0
+
+    watch_event = json.loads(capsys.readouterr().out)
+    assert watch_event["event"] == "indexed"
+    assert watch_event["repo_path"] == str(repo.resolve())
+    assert main(["--db", str(db_path), "get-symbol", "new_symbol"]) == 0
+    assert "new_symbol" in capsys.readouterr().out
 
 
 def test_eval_returns_nonzero_when_indexing_fails(tmp_path: Path) -> None:

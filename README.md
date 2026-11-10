@@ -89,7 +89,7 @@ Discover and index every git repo under a root:
 codescry index-root ~/code
 ```
 
-Show indexed repos and freshness:
+Show indexed repos, stale/dirty state, and CodeScry hook coverage:
 
 ```bash
 codescry status
@@ -102,6 +102,8 @@ Run the MCP server over stdio:
 ```bash
 codescry serve
 ```
+
+The MCP server answers queries only. It is not a file watcher; keep committed-code freshness by running `codescry reindex` or installing git hooks.
 
 Run the localhost HTTP API for dashboards, browser tools, or non-MCP agents:
 
@@ -159,6 +161,15 @@ codescry --db <db> reindex "$PWD"
 ```
 
 They preserve the selected DB path and must not fail git commands.
+
+If hooks are not practical, run an opt-in committed-state watcher:
+
+```bash
+codescry watch ~/code/my-repo
+codescry watch --once --jsonl
+```
+
+The watcher polls git `HEAD` for indexed repos or a specified repo, then reindexes committed snapshots only when the commit changes.
 
 ## Docs
 

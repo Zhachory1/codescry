@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from repo_index_mcp.hooks import HOOK_NAMES, install_hooks
+from repo_index_mcp.hooks import HOOK_NAMES, inspect_hooks, install_hooks, summarize_hook_status
 
 
 def test_install_hooks_writes_executable_git_hooks(tmp_path: Path) -> None:
@@ -53,3 +53,61 @@ def test_install_hooks_does_not_overwrite_existing_hook_without_force(tmp_path: 
 
     assert hook.read_text(encoding="utf-8") == "custom"
     assert hook not in installed
+
+
+def test_inspect_hooks_reports_installed_codescry_hooks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    install_hooks(repo, command="codescry-test")
+
+    status = inspect_hooks(repo)
+
+    assert status["installed"] is True
+    assert status["missing"] == []
+    assert status["non_codescry"] == []
+
+
+def test_inspect_hooks_reports_missing_and_custom_hooks(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    hook = repo / ".git" / "hooks" / "post-commit"
+    hook.write_text("#!/bin/sh\necho custom\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    status = inspect_hooks(repo)
+
+    assert status["installed"] is False
+    assert status["missing"] == ["post-merge"]
+    assert status["non_codescry"] == ["post-commit"]
+
+
+def test_summarize_hook_status_counts_repos_missing_any_hook() -> None:
+    summary = summarize_hook_status(
+        [
+            {"repo_path": "/repo/ok", "freshness_hooks": {"installed": True}},
+            {
+                "repo_path": "/repo/missing",
+                "freshness_hooks": {
+                    "installed": False,
+                    "missing": ["post-commit"],
+                    "non_codescry": [],
+                    "non_executable": [],
+                },
+            },
+        ]
+    )
+
+    assert summary["repos_checked"] == 2
+    assert summary["installed"] == 1
+    assert summary["missing"] == 1
+    assert summary["missing_repos"] == [
+        {
+            "repo_path": "/repo/missing",
+            "missing": ["post-commit"],
+            "non_codescry": [],
+            "non_executable": [],
+            "error": None,
+        }
+    ]

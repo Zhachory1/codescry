@@ -8,6 +8,7 @@ from pathlib import Path
 
 from repo_index_mcp.chunking import LineChunker
 from repo_index_mcp.embeddings import EmbeddingProvider, embed_batch, embedding_provider_from_env
+from repo_index_mcp.hooks import inspect_hooks
 from repo_index_mcp.models import Chunk, IndexResult, SearchResult
 from repo_index_mcp.repo import (
     changed_paths_between,
@@ -465,6 +466,7 @@ class RepoIndex:
                     current_commit(repo_root) != repo["last_commit_sha"]
                     or int(repo["error_count"] or 0) > 0
                 )
+                repo["freshness_hooks"] = inspect_hooks(repo_root)
             except Exception as exc:
                 repo["is_stale"] = True
                 repo["last_error"] = str(exc)
